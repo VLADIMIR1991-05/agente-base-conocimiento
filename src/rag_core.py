@@ -30,7 +30,7 @@ def load_settings() -> None:
         from dotenv import load_dotenv
     except ModuleNotFoundError:
         return
-    load_dotenv(ROOT / ".env")
+    load_dotenv(ROOT / ".env", encoding="utf-8-sig")
 
 
 def get_client():
