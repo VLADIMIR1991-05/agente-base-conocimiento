@@ -225,6 +225,43 @@ PAGE = r"""<!doctype html>
       font-size: 13px;
     }
 
+    .upload-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .upload-choice {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      cursor: pointer;
+    }
+
+    .upload-choice input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .upload-choice strong {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+
+    .upload-choice span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
     .chat {
       min-height: 620px;
       display: grid;
@@ -338,13 +375,25 @@ PAGE = r"""<!doctype html>
         <div class="panel-body">
           <form class="drop" id="uploadForm">
             <strong>Subir documentos</strong>
-            <input class="file-input" id="fileInput" name="files" type="file" multiple accept=".txt,.md,.docx,.xlsx,.pptx" />
+            <div class="upload-tabs">
+              <label class="upload-choice">
+                <input class="file-input" id="fileInput" name="files" type="file" multiple accept=".txt,.md,.docx,.xlsx,.pptx" />
+                <strong><i data-lucide="files"></i>Archivos</strong>
+                <span>Selecciona documentos sueltos.</span>
+              </label>
+              <label class="upload-choice">
+                <input class="file-input" id="folderInput" type="file" webkitdirectory directory multiple />
+                <strong><i data-lucide="folder-up"></i>Carpeta</strong>
+                <span>Incluye subcarpetas completas.</span>
+              </label>
+            </div>
+            <div class="file-meta" id="selectionMeta">Nada seleccionado.</div>
             <div class="btn-row">
               <button class="secondary" type="submit"><i data-lucide="upload"></i>Subir</button>
               <button class="primary" type="button" id="indexBtn"><i data-lucide="refresh-cw"></i>Crear indice</button>
             </div>
           </form>
-          <div class="hint">Por ahora deje cargado solo el Excel <strong>Guia_lectura_codigos.xlsx</strong>. Cuando agregues mas archivos, crea el indice otra vez.</div>
+          <div class="hint">Puedes subir archivos sueltos o carpetas completas. Cuando agregues informacion nueva, crea el indice otra vez.</div>
           <div class="files" id="files"></div>
         </div>
       </aside>
@@ -371,6 +420,9 @@ PAGE = r"""<!doctype html>
     const statusEl = document.querySelector("#indexStatus span");
     const messagesEl = document.querySelector("#messages");
     const uploadForm = document.querySelector("#uploadForm");
+    const fileInput = document.querySelector("#fileInput");
+    const folderInput = document.querySelector("#folderInput");
+    const selectionMeta = document.querySelector("#selectionMeta");
     const indexBtn = document.querySelector("#indexBtn");
     const askForm = document.querySelector("#askForm");
     const questionEl = document.querySelector("#question");
@@ -393,6 +445,17 @@ PAGE = r"""<!doctype html>
       return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     }
 
+    function describeSelection(input, label) {
+      const files = Array.from(input.files || []);
+      if (!files.length) {
+        selectionMeta.textContent = "Nada seleccionado.";
+        return;
+      }
+      const folders = new Set(files.map((file) => (file.webkitRelativePath || "").split("/")[0]).filter(Boolean));
+      const folderText = folders.size ? ` en ${folders.size} carpeta(s)` : "";
+      selectionMeta.textContent = `${label}: ${files.length} archivo(s)${folderText}.`;
+    }
+
     async function refreshFiles() {
       const response = await fetch("/api/files");
       const data = await response.json();
@@ -408,18 +471,37 @@ PAGE = r"""<!doctype html>
             <div class="file-name"></div>
             <div class="file-meta">${humanSize(file.size)} - ${file.extension}</div>
           </div>`;
-        row.querySelector(".file-name").textContent = file.name;
+        row.querySelector(".file-name").textContent = file.path || file.name;
         filesEl.appendChild(row);
       }
       icons();
     }
 
+    fileInput.addEventListener("change", () => {
+      folderInput.value = "";
+      describeSelection(fileInput, "Archivos");
+    });
+
+    folderInput.addEventListener("change", () => {
+      fileInput.value = "";
+      describeSelection(folderInput, "Carpeta");
+    });
+
     uploadForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const formData = new FormData(uploadForm);
+      const formData = new FormData();
+      const folderFiles = Array.from(folderInput.files || []);
+      const looseFiles = Array.from(fileInput.files || []);
+      const selectedFiles = folderFiles.length ? folderFiles : looseFiles;
+      for (const file of selectedFiles) {
+        formData.append("files", file, file.webkitRelativePath || file.name);
+      }
       const response = await fetch("/api/upload", { method: "POST", body: formData });
       const data = await response.json();
       addMessage(data.message, data.ok ? "assistant" : "assistant");
+      fileInput.value = "";
+      folderInput.value = "";
+      selectionMeta.textContent = "Nada seleccionado.";
       await refreshFiles();
     });
 
@@ -479,12 +561,14 @@ def page_response(handler: BaseHTTPRequestHandler) -> None:
 def list_files() -> list[dict]:
     KNOWLEDGE_DIR.mkdir(exist_ok=True)
     files = []
-    for path in sorted(KNOWLEDGE_DIR.iterdir()):
+    for path in sorted(KNOWLEDGE_DIR.rglob("*")):
         if not path.is_file() or path.name.startswith(".") or path.name == "urls.txt":
             continue
+        relative_path = path.relative_to(KNOWLEDGE_DIR)
         files.append(
             {
                 "name": path.name,
+                "path": str(relative_path).replace("\\", "/"),
                 "size": path.stat().st_size,
                 "extension": path.suffix.lower() or "archivo",
             }
@@ -492,9 +576,17 @@ def list_files() -> list[dict]:
     return files
 
 
-def safe_filename(name: str) -> str:
-    candidate = Path(unquote(name)).name.replace("\\", "_").replace("/", "_")
-    return "".join(char for char in candidate if char.isalnum() or char in "._- ")
+def safe_relative_path(name: str) -> Path | None:
+    raw_parts = unquote(name).replace("\\", "/").split("/")
+    safe_parts = []
+    for part in raw_parts:
+        cleaned = "".join(char for char in part.strip() if char.isalnum() or char in "._- ")
+        if not cleaned or cleaned in {".", ".."}:
+            continue
+        safe_parts.append(cleaned)
+    if not safe_parts:
+        return None
+    return Path(*safe_parts)
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -530,19 +622,24 @@ class AppHandler(BaseHTTPRequestHandler):
         for field in fields:
             if not field.filename:
                 continue
-            filename = safe_filename(field.filename)
-            extension = Path(filename).suffix.lower()
+            relative_path = safe_relative_path(field.filename)
+            if relative_path is None:
+                continue
+            extension = relative_path.suffix.lower()
             if extension not in ALLOWED_EXTENSIONS:
                 continue
-            destination = KNOWLEDGE_DIR / filename
+            destination = KNOWLEDGE_DIR / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
             with destination.open("wb") as output:
                 output.write(field.file.read())
-            saved.append(filename)
+            saved.append(str(relative_path).replace("\\", "/"))
 
         if not saved:
             json_response(self, {"ok": False, "message": "No se subio ningun archivo compatible."}, status=400)
             return
-        json_response(self, {"ok": True, "message": f"Archivo(s) subido(s): {', '.join(saved)}"})
+        shown = ", ".join(saved[:8])
+        extra = f" y {len(saved) - 8} mas" if len(saved) > 8 else ""
+        json_response(self, {"ok": True, "message": f"Archivo(s) subido(s): {shown}{extra}"})
 
     def handle_ingest(self) -> None:
         try:
