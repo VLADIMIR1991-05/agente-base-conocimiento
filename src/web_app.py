@@ -255,9 +255,52 @@ PAGE = r"""<!doctype html>
       padding: 12px 14px;
       border-radius: 8px;
       line-height: 1.45;
-      white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+
+    .message p {
+      margin: 0 0 10px;
+      white-space: pre-wrap;
+    }
+
+    .message p:last-child { margin-bottom: 0; }
+
+    .message ul {
+      margin: 0 0 10px 20px;
+      padding: 0;
+    }
+
+    .message-table-wrap {
+      max-width: 100%;
+      overflow-x: auto;
+      margin: 10px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+    }
+
+    .message table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 420px;
+      font-size: 14px;
+    }
+
+    .message th,
+    .message td {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .message th {
+      background: #f4fbf7;
+      color: var(--teal-dark);
+      font-weight: 800;
+    }
+
+    .message tr:last-child td { border-bottom: 0; }
 
     .assistant {
       align-self: flex-start;
@@ -453,11 +496,94 @@ PAGE = r"""<!doctype html>
       return el;
     }
 
+    function appendInlineText(parent, text) {
+      const parts = text.split(/(\*\*[^*]+\*\*)/g);
+      for (const part of parts) {
+        if (part.startsWith("**") && part.endsWith("**")) {
+          const strong = document.createElement("strong");
+          strong.textContent = part.slice(2, -2);
+          parent.appendChild(strong);
+        } else if (part) {
+          parent.appendChild(document.createTextNode(part));
+        }
+      }
+    }
+
+    function isTableSeparator(line) {
+      return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+    }
+
+    function parseTableRow(line) {
+      return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+    }
+
+    function appendParagraph(container, lines) {
+      const text = lines.join("\n").trim();
+      if (!text) return;
+      const p = document.createElement("p");
+      appendInlineText(p, text);
+      container.appendChild(p);
+    }
+
+    function appendTable(container, lines) {
+      const headers = parseTableRow(lines[0]);
+      const rows = lines.slice(2).map(parseTableRow).filter((row) => row.length);
+      const wrap = document.createElement("div");
+      wrap.className = "message-table-wrap";
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      for (const header of headers) {
+        const th = document.createElement("th");
+        appendInlineText(th, header);
+        headRow.appendChild(th);
+      }
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        for (const cell of row) {
+          const td = document.createElement("td");
+          appendInlineText(td, cell);
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      container.appendChild(wrap);
+    }
+
+    function renderAssistantText(container, text) {
+      const lines = text.split("\n");
+      let paragraph = [];
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const next = lines[index + 1] || "";
+        if (line.includes("|") && isTableSeparator(next)) {
+          appendParagraph(container, paragraph);
+          paragraph = [];
+          const tableLines = [line, next];
+          index += 2;
+          while (index < lines.length && lines[index].includes("|")) {
+            tableLines.push(lines[index]);
+            index += 1;
+          }
+          index -= 1;
+          appendTable(container, tableLines);
+          continue;
+        }
+        paragraph.push(line);
+      }
+      appendParagraph(container, paragraph);
+    }
+
     function addAssistantMessage(text, images = []) {
       const el = document.createElement("div");
       el.className = "message assistant";
       const textEl = document.createElement("div");
-      textEl.textContent = text;
+      renderAssistantText(textEl, text);
       el.appendChild(textEl);
       if (images.length) {
         const grid = document.createElement("div");
