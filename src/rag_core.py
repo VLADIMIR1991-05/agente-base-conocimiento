@@ -15,6 +15,10 @@ INDEX_PATH = DATA_DIR / "index.json"
 SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx"}
 
 
+class UserFacingError(RuntimeError):
+    pass
+
+
 @dataclass
 class TextDocument:
     source: str
@@ -29,10 +33,16 @@ def load_settings() -> None:
     load_dotenv(ROOT / ".env")
 
 
-def get_client() -> OpenAI:
-    from openai import OpenAI
-
+def get_client():
     load_settings()
+    if not os.getenv("OPENAI_API_KEY"):
+        raise UserFacingError("Falta configurar OPENAI_API_KEY en el archivo .env.")
+
+    try:
+        from openai import OpenAI
+    except ModuleNotFoundError as error:
+        raise UserFacingError("Faltan dependencias. Ejecuta: pip install -r requirements.txt") from error
+
     return OpenAI()
 
 
@@ -154,7 +164,7 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 180) -> list[st
     return chunks
 
 
-def embed_texts(client: OpenAI, texts: list[str]) -> list[list[float]]:
+def embed_texts(client, texts: list[str]) -> list[list[float]]:
     model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
     embeddings = []
     batch_size = 80
@@ -188,7 +198,7 @@ def build_index() -> dict:
 
 def load_index() -> dict:
     if not INDEX_PATH.exists():
-        raise RuntimeError("Todavia no existe data/index.json. Ejecuta primero: python src/ingest.py")
+        raise UserFacingError("Primero crea el indice con el boton 'Crear indice'.")
     return json.loads(INDEX_PATH.read_text(encoding="utf-8"))
 
 
@@ -202,8 +212,8 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
 
 
 def retrieve(question: str, top_k: int = 5) -> list[dict]:
-    client = get_client()
     index = load_index()
+    client = get_client()
     question_embedding = embed_texts(client, [question])[0]
     scored = []
     for chunk in index["chunks"]:
@@ -213,6 +223,7 @@ def retrieve(question: str, top_k: int = 5) -> list[dict]:
 
 
 def answer_question(question: str, top_k: int = 5) -> str:
+    load_index()
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.5")
     matches = retrieve(question, top_k=top_k)

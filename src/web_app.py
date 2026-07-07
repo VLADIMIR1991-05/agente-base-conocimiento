@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
 
-from rag_core import INDEX_PATH, KNOWLEDGE_DIR, answer_question, build_index
+from rag_core import INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question, build_index
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -547,8 +547,11 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_ingest(self) -> None:
         try:
             index = build_index()
+        except UserFacingError as error:
+            json_response(self, {"ok": False, "message": str(error)}, status=400)
+            return
         except Exception as error:
-            json_response(self, {"ok": False, "message": f"No pude crear el indice: {error}"}, status=500)
+            json_response(self, {"ok": False, "message": f"No pude crear el indice. Revisa la configuracion e intenta otra vez. Detalle: {error}"}, status=500)
             return
         json_response(self, {"ok": True, "message": f"Indice creado con {len(index['chunks'])} fragmentos."})
 
@@ -561,8 +564,11 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         try:
             answer = answer_question(question)
+        except UserFacingError as error:
+            json_response(self, {"ok": False, "message": str(error)}, status=400)
+            return
         except Exception as error:
-            json_response(self, {"ok": False, "message": f"No pude responder todavia: {error}"}, status=500)
+            json_response(self, {"ok": False, "message": f"No pude responder todavia. Revisa la configuracion e intenta otra vez. Detalle: {error}"}, status=500)
             return
         json_response(self, {"ok": True, "answer": answer})
 
