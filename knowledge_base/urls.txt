@@ -1,0 +1,3 @@
+# Pega aqui enlaces web, uno por linea.
+# Ejemplo:
+# https://tusitio.com/manual
