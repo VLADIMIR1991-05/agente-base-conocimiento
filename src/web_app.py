@@ -18,6 +18,7 @@ from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingErro
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
 DB_PATH = ROOT / "data" / "usage_log.db"
+ASSETS_DIR = ROOT / "assets"
 ADMIN_USERS = {
     "USUARIO": {"CONTRASEÑA", "contraseña", "CONTRASENA", "contrasena"},
 }
@@ -29,7 +30,7 @@ PAGE = r"""<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agente de Conocimiento</title>
+  <title>Asistente MADEVAL</title>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <style>
     :root {
@@ -80,15 +81,15 @@ PAGE = r"""<!doctype html>
     }
 
     .mark {
-      width: 42px;
-      height: 42px;
-      display: grid;
-      place-items: center;
-      color: white;
-      background: var(--teal);
+      width: 54px;
+      height: 54px;
+      display: block;
       border-radius: 8px;
       box-shadow: var(--shadow);
       flex: 0 0 auto;
+      object-fit: cover;
+      background: white;
+      border: 1px solid var(--line);
     }
 
     h1 {
@@ -354,6 +355,14 @@ PAGE = r"""<!doctype html>
       background: white;
     }
 
+    .button-bot {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      object-fit: cover;
+      background: white;
+    }
+
     textarea {
       width: 100%;
       min-height: 48px;
@@ -376,18 +385,6 @@ PAGE = r"""<!doctype html>
       color: #64512a;
       font-size: 14px;
       line-height: 1.4;
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 9px;
-      border-radius: 999px;
-      background: #edf7f2;
-      color: var(--teal-dark);
-      font-size: 13px;
-      font-weight: 700;
     }
 
     .report-list {
@@ -484,8 +481,8 @@ PAGE = r"""<!doctype html>
     <section class="topbar">
       <div>
         <div class="brand">
-          <div class="mark"><i data-lucide="library-big"></i></div>
-          <h1>Agente de Conocimiento</h1>
+          <img class="mark" src="/assets/bot.png" alt="Asistente MADEVAL" />
+          <h1>Asistente MADEVAL</h1>
         </div>
         <p class="subtitle">Consulta la informacion de la empresa con una experiencia clara y rapida.</p>
       </div>
@@ -522,25 +519,20 @@ PAGE = r"""<!doctype html>
       </aside>
 
       <section class="panel chat">
-        <div class="panel-header">
-          <h2>Chat con tus documentos</h2>
-          <span class="pill"><i data-lucide="shield-check"></i>Solo base</span>
-        </div>
         <div class="messages" id="messages">
-          <div class="message assistant">Hola. Identificate con tu nombre y preguntame sobre la informacion de la empresa.</div>
         </div>
         <form class="composer" id="askForm">
           <textarea id="question" placeholder="Escribe una pregunta sobre la empresa..." required></textarea>
-          <button class="accent" type="submit"><i data-lucide="send"></i>Preguntar</button>
+          <button class="accent" type="submit"><img class="button-bot" src="/assets/bot.png" alt="" />Enviar</button>
         </form>
       </section>
     </section>
   </main>
 
   <div class="modal-backdrop" id="nameGate">
-    <div class="modal">
-      <div class="brand">
-        <div class="mark"><i data-lucide="library-big"></i></div>
+      <div class="modal">
+        <div class="brand">
+        <img class="mark" src="/assets/bot.png" alt="Asistente MADEVAL" />
         <h2>Antes de empezar</h2>
       </div>
       <p class="file-meta">Ingresa tu nombre para personalizar la respuesta y registrar internamente tus consultas.</p>
@@ -806,7 +798,7 @@ PAGE = r"""<!doctype html>
       userNameEl.value = name;
       localStorage.setItem("kb_user_name", name);
       nameGate.classList.remove("active");
-      addAssistantMessage(`Hola ${name}. Ya puedes hacerme preguntas sobre la informacion de la empresa.`);
+      addAssistantMessage(`Hola ${name}. Ya puedes hacerme preguntas.`);
       questionEl.focus();
     }
 
@@ -1115,6 +1107,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             json_response(self, {"interactions": recent_interactions()})
             return
+        if self.path.startswith("/assets/"):
+            self.handle_asset_file()
+            return
         if self.path.startswith("/knowledge/"):
             self.handle_knowledge_file()
             return
@@ -1144,6 +1139,24 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         target = (KNOWLEDGE_DIR / relative).resolve()
         root = KNOWLEDGE_DIR.resolve()
+        if root not in target.parents or not target.exists() or not target.is_file():
+            json_response(self, {"ok": False, "message": "Archivo no encontrado."}, status=404)
+            return
+        mime_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_asset_file(self) -> None:
+        relative = safe_relative_path(self.path.removeprefix("/assets/"))
+        if relative is None:
+            json_response(self, {"ok": False, "message": "Archivo no encontrado."}, status=404)
+            return
+        target = (ASSETS_DIR / relative).resolve()
+        root = ASSETS_DIR.resolve()
         if root not in target.parents or not target.exists() or not target.is_file():
             json_response(self, {"ok": False, "message": "Archivo no encontrado."}, status=404)
             return
