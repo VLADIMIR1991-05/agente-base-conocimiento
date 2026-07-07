@@ -2,7 +2,6 @@ import warnings
 
 warnings.simplefilter("ignore", DeprecationWarning)
 
-import cgi
 import json
 import mimetypes
 import os
@@ -1160,9 +1159,6 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/admin/login":
             self.handle_admin_login()
             return
-        if self.path == "/api/upload":
-            self.handle_upload()
-            return
         if self.path == "/api/ingest":
             self.handle_ingest()
             return
@@ -1182,36 +1178,6 @@ class AppHandler(BaseHTTPRequestHandler):
         token = secrets.token_urlsafe(32)
         ADMIN_SESSIONS.add(token)
         json_response(self, {"ok": True, "token": token})
-
-    def handle_upload(self) -> None:
-        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST"})
-        fields = form["files"] if "files" in form else []
-        if not isinstance(fields, list):
-            fields = [fields]
-
-        saved = []
-        KNOWLEDGE_DIR.mkdir(exist_ok=True)
-        for field in fields:
-            if not field.filename:
-                continue
-            relative_path = safe_relative_path(field.filename)
-            if relative_path is None:
-                continue
-            extension = relative_path.suffix.lower()
-            if extension not in ALLOWED_EXTENSIONS:
-                continue
-            destination = KNOWLEDGE_DIR / relative_path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with destination.open("wb") as output:
-                output.write(field.file.read())
-            saved.append(str(relative_path).replace("\\", "/"))
-
-        if not saved:
-            json_response(self, {"ok": False, "message": "No se subio ningun archivo compatible."}, status=400)
-            return
-        shown = ", ".join(saved[:8])
-        extra = f" y {len(saved) - 8} mas" if len(saved) > 8 else ""
-        json_response(self, {"ok": True, "message": f"Archivo(s) subido(s): {shown}{extra}"})
 
     def handle_ingest(self) -> None:
         try:
