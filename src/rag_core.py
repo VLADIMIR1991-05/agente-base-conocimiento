@@ -243,7 +243,7 @@ def retrieve(question: str, top_k: int = 5) -> list[dict]:
 def answer_question(question: str, top_k: int = 5) -> str:
     load_index()
     client = get_client()
-    model = os.getenv("OPENAI_MODEL", "gpt-5.5")
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
     matches = retrieve(question, top_k=top_k)
     context = "\n\n".join(
         f"[Fuente: {match['source']} | fragmento {match['chunk']}]\n{match['text']}"
