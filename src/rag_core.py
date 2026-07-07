@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -259,6 +260,12 @@ def build_context(matches: list[dict]) -> str:
     )
 
 
+def strip_visible_sources(text: str) -> str:
+    cleaned = re.sub(r"\n+\*\*Fuentes:\*\*.*$", "", text, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"\n+Fuentes:\s*.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    return cleaned.strip()
+
+
 def generate_answer(question: str, matches: list[dict], user_name: str = "") -> str:
     load_index()
     client = get_client()
@@ -283,7 +290,7 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
                         "Si la pregunta es ambigua, responde con la informacion mas cercana y sugiere como precisar la consulta. "
                         "Si el contexto no contiene la respuesta, di exactamente: "
                         "'No encuentro esa informacion en mi base de conocimiento.' "
-                        "Cuando respondas, incluye fuentes breves y nombres de archivo relevantes."
+                        "No muestres fuentes, nombres de archivo, fragmentos ni citas en la respuesta visible."
                     ),
                 },
                 {
@@ -294,7 +301,7 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
         )
     except Exception as error:
         raise friendly_openai_error(error) from error
-    return response.output_text
+    return strip_visible_sources(response.output_text)
 
 
 def answer_question(question: str, top_k: int = 5) -> str:

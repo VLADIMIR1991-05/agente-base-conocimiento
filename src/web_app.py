@@ -488,7 +488,7 @@ PAGE = r"""<!doctype html>
           <div class="mark"><i data-lucide="library-big"></i></div>
           <h1>Agente de Conocimiento</h1>
         </div>
-        <p class="subtitle">Consulta tus documentos privados con una experiencia clara, rapida y enfocada en fuentes.</p>
+        <p class="subtitle">Consulta la informacion de la empresa con una experiencia clara y rapida.</p>
       </div>
       <button class="icon-button" type="button" id="adminOpen" title="Super usuario"><i data-lucide="settings"></i></button>
     </section>
