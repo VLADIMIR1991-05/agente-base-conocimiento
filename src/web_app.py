@@ -6,6 +6,7 @@ import cgi
 import json
 import mimetypes
 import os
+import secrets
 import sqlite3
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,10 @@ from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingErro
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
 DB_PATH = ROOT / "data" / "usage_log.db"
+ADMIN_USERS = {
+    "USUARIO": {"CONTRASEÑA", "contraseña", "CONTRASENA", "contrasena"},
+}
+ADMIN_SESSIONS: set[str] = set()
 
 
 PAGE = r"""<!doctype html>
@@ -55,7 +60,7 @@ PAGE = r"""<!doctype html>
     }
 
     .shell {
-      width: min(1180px, calc(100% - 32px));
+      width: min(920px, calc(100% - 32px));
       margin: 0 auto;
       padding: 24px 0 36px;
     }
@@ -95,6 +100,7 @@ PAGE = r"""<!doctype html>
     }
 
     .subtitle {
+      display: none;
       margin: 8px 0 0;
       color: var(--muted);
       font-size: 15px;
@@ -115,10 +121,12 @@ PAGE = r"""<!doctype html>
 
     .grid {
       display: grid;
-      grid-template-columns: 380px 1fr;
+      grid-template-columns: 1fr;
       gap: 18px;
       align-items: stretch;
     }
+
+    aside.panel { display: none; }
 
     .panel {
       background: rgba(255,255,255,.94);
@@ -235,7 +243,7 @@ PAGE = r"""<!doctype html>
     }
 
     .chat {
-      min-height: 620px;
+      min-height: calc(100vh - 150px);
       display: grid;
       grid-template-rows: auto 1fr auto;
     }
@@ -246,7 +254,7 @@ PAGE = r"""<!doctype html>
       flex-direction: column;
       gap: 12px;
       overflow-y: auto;
-      min-height: 410px;
+      min-height: 460px;
       background: linear-gradient(180deg, #ffffff, #fbfdfb);
     }
 
@@ -405,6 +413,64 @@ PAGE = r"""<!doctype html>
       margin-bottom: 3px;
     }
 
+    .icon-button {
+      width: 44px;
+      min-width: 44px;
+      padding: 0;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.88);
+      color: var(--teal-dark);
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(11, 23, 18, .42);
+      z-index: 20;
+    }
+
+    .modal-backdrop.active { display: flex; }
+
+    .modal {
+      width: min(440px, 100%);
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .modal h2 { font-size: 22px; }
+
+    .admin-panel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      height: 100vh;
+      width: min(440px, 100%);
+      background: white;
+      border-left: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      transform: translateX(105%);
+      transition: transform .18s ease;
+      z-index: 18;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .admin-panel.active { transform: translateX(0); }
+
+    .admin-body {
+      padding: 18px;
+      overflow-y: auto;
+    }
+
     @media (max-width: 860px) {
       .topbar { align-items: flex-start; flex-direction: column; }
       .grid { grid-template-columns: 1fr; }
@@ -424,7 +490,7 @@ PAGE = r"""<!doctype html>
         </div>
         <p class="subtitle">Consulta tus documentos privados con una experiencia clara, rapida y enfocada en fuentes.</p>
       </div>
-      <div class="status" id="indexStatus"><i data-lucide="activity"></i><span>Revisando indice...</span></div>
+      <button class="icon-button" type="button" id="adminOpen" title="Super usuario"><i data-lucide="settings"></i></button>
     </section>
 
     <section class="grid">
@@ -472,16 +538,75 @@ PAGE = r"""<!doctype html>
     </section>
   </main>
 
+  <div class="modal-backdrop" id="nameGate">
+    <div class="modal">
+      <div class="brand">
+        <div class="mark"><i data-lucide="library-big"></i></div>
+        <h2>Antes de empezar</h2>
+      </div>
+      <p class="file-meta">Ingresa tu nombre para personalizar la respuesta y registrar internamente tus consultas.</p>
+      <input class="text-input" id="gateName" type="text" placeholder="Tu nombre" autocomplete="name" />
+      <button class="primary" type="button" id="saveNameBtn"><i data-lucide="check"></i>Continuar</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="adminLogin">
+    <div class="modal">
+      <div class="panel-header" style="padding:0 0 10px;">
+        <h2>Super usuario</h2>
+        <button class="icon-button" type="button" id="adminLoginClose" title="Cerrar"><i data-lucide="x"></i></button>
+      </div>
+      <input class="text-input" id="adminUser" type="text" placeholder="Usuario" autocomplete="username" />
+      <input class="text-input" id="adminPassword" type="password" placeholder="Contraseña" autocomplete="current-password" />
+      <button class="primary" type="button" id="adminLoginBtn"><i data-lucide="lock-keyhole"></i>Ingresar</button>
+      <div class="file-meta" id="adminLoginMessage"></div>
+    </div>
+  </div>
+
+  <section class="admin-panel" id="adminPanel">
+    <div class="panel-header">
+      <h2>Opciones de super usuario</h2>
+      <button class="icon-button" type="button" id="adminClose" title="Cerrar"><i data-lucide="x"></i></button>
+    </div>
+    <div class="admin-body">
+      <div class="control-box">
+        <strong>Base local</strong>
+        <div class="file-meta"><span id="adminFileCount">0</span> archivos detectados. Copia documentos en <strong>knowledge_base</strong> y actualiza el indice.</div>
+        <button class="primary" type="button" id="adminIndexBtn"><i data-lucide="refresh-cw"></i>Crear indice</button>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Reporte de consultas</strong>
+        <div class="file-meta">Descarga el historial ordenado por usuario, preguntas, respuestas y fecha.</div>
+        <button class="secondary" type="button" id="downloadReportBtn"><i data-lucide="download"></i>Descargar Excel</button>
+        <div class="report-list" id="reportList"></div>
+      </div>
+    </div>
+  </section>
+
   <script>
     const filesEl = document.querySelector("#files");
     const fileCountEl = document.querySelector("#fileCount");
-    const statusEl = document.querySelector("#indexStatus span");
     const messagesEl = document.querySelector("#messages");
     const reportListEl = document.querySelector("#reportList");
     const userNameEl = document.querySelector("#userName");
-    const indexBtn = document.querySelector("#indexBtn");
+    const adminFileCountEl = document.querySelector("#adminFileCount");
+    const nameGate = document.querySelector("#nameGate");
+    const gateNameEl = document.querySelector("#gateName");
+    const saveNameBtn = document.querySelector("#saveNameBtn");
+    const adminOpen = document.querySelector("#adminOpen");
+    const adminLogin = document.querySelector("#adminLogin");
+    const adminLoginClose = document.querySelector("#adminLoginClose");
+    const adminLoginBtn = document.querySelector("#adminLoginBtn");
+    const adminUserEl = document.querySelector("#adminUser");
+    const adminPasswordEl = document.querySelector("#adminPassword");
+    const adminLoginMessage = document.querySelector("#adminLoginMessage");
+    const adminPanel = document.querySelector("#adminPanel");
+    const adminClose = document.querySelector("#adminClose");
+    const adminIndexBtn = document.querySelector("#adminIndexBtn");
+    const downloadReportBtn = document.querySelector("#downloadReportBtn");
     const askForm = document.querySelector("#askForm");
     const questionEl = document.querySelector("#question");
+    let adminToken = sessionStorage.getItem("kb_admin_token") || "";
 
     function icons() {
       if (window.lucide) window.lucide.createIcons();
@@ -619,8 +744,8 @@ PAGE = r"""<!doctype html>
     async function refreshFiles() {
       const response = await fetch("/api/files");
       const data = await response.json();
-      fileCountEl.textContent = data.files.length;
-      statusEl.textContent = data.index_exists ? "Indice listo" : "Indice pendiente";
+      if (fileCountEl) fileCountEl.textContent = data.files.length;
+      if (adminFileCountEl) adminFileCountEl.textContent = data.files.length;
       filesEl.innerHTML = "";
       for (const file of data.files) {
         const row = document.createElement("div");
@@ -638,7 +763,9 @@ PAGE = r"""<!doctype html>
     }
 
     async function refreshReport() {
-      const response = await fetch("/api/report");
+      if (!adminToken) return;
+      const response = await fetch("/api/report", { headers: { Authorization: `Bearer ${adminToken}` } });
+      if (!response.ok) return;
       const data = await response.json();
       reportListEl.innerHTML = "";
       if (!data.interactions.length) {
@@ -664,18 +791,82 @@ PAGE = r"""<!doctype html>
     }
 
     userNameEl.value = localStorage.getItem("kb_user_name") || "";
+    gateNameEl.value = userNameEl.value;
+    nameGate.classList.add("active");
+    setTimeout(() => gateNameEl.focus(), 50);
     userNameEl.addEventListener("input", () => {
       localStorage.setItem("kb_user_name", currentUserName());
     });
 
-    indexBtn.addEventListener("click", async () => {
-      indexBtn.disabled = true;
-      statusEl.textContent = "Creando indice...";
+    function saveUserName() {
+      const name = gateNameEl.value.trim();
+      if (!name) {
+        gateNameEl.focus();
+        return;
+      }
+      userNameEl.value = name;
+      localStorage.setItem("kb_user_name", name);
+      nameGate.classList.remove("active");
+      addAssistantMessage(`Hola ${name}. Ya puedes hacerme preguntas sobre la informacion de la empresa.`);
+      questionEl.focus();
+    }
+
+    saveNameBtn.addEventListener("click", saveUserName);
+    gateNameEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") saveUserName();
+    });
+
+    async function createIndex(button) {
+      button.disabled = true;
       const response = await fetch("/api/ingest", { method: "POST" });
       const data = await response.json();
-      statusEl.textContent = data.ok ? "Indice listo" : "Indice pendiente";
       addMessage(data.message, "assistant");
-      indexBtn.disabled = false;
+      button.disabled = false;
+      await refreshFiles();
+    }
+
+    adminIndexBtn.addEventListener("click", () => createIndex(adminIndexBtn));
+
+    adminOpen.addEventListener("click", () => {
+      if (adminToken) {
+        adminPanel.classList.add("active");
+        refreshReport();
+      } else {
+        adminLogin.classList.add("active");
+        setTimeout(() => adminUserEl.focus(), 50);
+      }
+    });
+
+    adminLoginClose.addEventListener("click", () => adminLogin.classList.remove("active"));
+    adminClose.addEventListener("click", () => adminPanel.classList.remove("active"));
+
+    async function loginAdmin() {
+      adminLoginMessage.textContent = "";
+      const response = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: adminUserEl.value.trim(), password: adminPasswordEl.value })
+      });
+      const data = await response.json();
+      if (!data.ok) {
+        adminLoginMessage.textContent = data.message || "No se pudo ingresar.";
+        return;
+      }
+      adminToken = data.token;
+      sessionStorage.setItem("kb_admin_token", adminToken);
+      adminLogin.classList.remove("active");
+      adminPanel.classList.add("active");
+      await refreshReport();
+    }
+
+    adminLoginBtn.addEventListener("click", loginAdmin);
+    adminPasswordEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") loginAdmin();
+    });
+
+    downloadReportBtn.addEventListener("click", () => {
+      if (!adminToken) return;
+      window.location.href = `/api/report.xlsx?token=${encodeURIComponent(adminToken)}`;
     });
 
     askForm.addEventListener("submit", async (event) => {
@@ -684,8 +875,8 @@ PAGE = r"""<!doctype html>
       if (!question) return;
       const userName = currentUserName();
       if (!userName) {
-        addAssistantMessage("Primero escribe tu nombre en el panel de usuario.");
-        userNameEl.focus();
+        nameGate.classList.add("active");
+        gateNameEl.focus();
         return;
       }
       addMessage(question, "user");
@@ -699,7 +890,7 @@ PAGE = r"""<!doctype html>
       const data = await response.json();
       waiting.remove();
       addAssistantMessage(data.answer || data.message, data.images || []);
-      await refreshReport();
+      if (adminPanel.classList.contains("active")) await refreshReport();
     });
 
     questionEl.addEventListener("keydown", (event) => {
@@ -793,6 +984,66 @@ def recent_interactions(limit: int = 20) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def all_interactions() -> list[dict]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT created_at, date, user_name, question, answer, sources
+            FROM interactions
+            ORDER BY user_name COLLATE NOCASE, created_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_report_xlsx() -> bytes:
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ModuleNotFoundError as error:
+        raise UserFacingError("Falta openpyxl para generar el reporte Excel.") from error
+
+    from io import BytesIO
+
+    rows = all_interactions()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Reporte consultas"
+    headers = ["Usuario", "Fecha", "Pregunta", "Respuesta", "Fuentes"]
+    sheet.append(headers)
+    header_fill = PatternFill("solid", fgColor="DFF4EA")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="00665C")
+        cell.fill = header_fill
+
+    current_user = None
+    for row in rows:
+        if row["user_name"] != current_user:
+            current_user = row["user_name"]
+            sheet.append([current_user, "", "", "", ""])
+            user_row = sheet.max_row
+            sheet.cell(user_row, 1).font = Font(bold=True, size=14, color="17211C")
+        try:
+            sources = ", ".join(json.loads(row["sources"] or "[]"))
+        except json.JSONDecodeError:
+            sources = row["sources"] or ""
+        sheet.append([row["user_name"], row["created_at"], row["question"], row["answer"], sources])
+
+    widths = [24, 22, 44, 70, 55]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    for row in sheet.iter_rows():
+        for cell in row:
+            cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def list_files() -> list[dict]:
     KNOWLEDGE_DIR.mkdir(exist_ok=True)
     files = []
@@ -825,6 +1076,29 @@ def safe_relative_path(name: str) -> Path | None:
     return Path(*safe_parts)
 
 
+def admin_token_from(handler: BaseHTTPRequestHandler) -> str:
+    auth_header = handler.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.removeprefix("Bearer ").strip()
+    if "?token=" in handler.path:
+        return unquote(handler.path.split("?token=", 1)[1].split("&", 1)[0])
+    return ""
+
+
+def is_admin_request(handler: BaseHTTPRequestHandler) -> bool:
+    return admin_token_from(handler) in ADMIN_SESSIONS
+
+
+def read_json_body(handler: BaseHTTPRequestHandler) -> dict:
+    length = int(handler.headers.get("Content-Length", "0"))
+    raw = handler.rfile.read(length)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    return json.loads(text or "{}")
+
+
 class AppHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path in {"/", "/index.html"}:
@@ -833,13 +1107,36 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/files":
             json_response(self, {"files": list_files(), "index_exists": INDEX_PATH.exists()})
             return
+        if self.path.startswith("/api/report.xlsx"):
+            self.handle_report_xlsx()
+            return
         if self.path == "/api/report":
+            if not is_admin_request(self):
+                json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
+                return
             json_response(self, {"interactions": recent_interactions()})
             return
         if self.path.startswith("/knowledge/"):
             self.handle_knowledge_file()
             return
         json_response(self, {"ok": False, "message": "Ruta no encontrada."}, status=404)
+
+    def handle_report_xlsx(self) -> None:
+        if not is_admin_request(self):
+            json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
+            return
+        try:
+            body = create_report_xlsx()
+        except UserFacingError as error:
+            json_response(self, {"ok": False, "message": str(error)}, status=500)
+            return
+        filename = f"reporte_consultas_{datetime.now().date().isoformat()}.xlsx"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def handle_knowledge_file(self) -> None:
         relative = safe_relative_path(self.path.removeprefix("/knowledge/"))
@@ -860,6 +1157,9 @@ class AppHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
+        if self.path == "/api/admin/login":
+            self.handle_admin_login()
+            return
         if self.path == "/api/upload":
             self.handle_upload()
             return
@@ -870,6 +1170,18 @@ class AppHandler(BaseHTTPRequestHandler):
             self.handle_ask()
             return
         json_response(self, {"ok": False, "message": "Ruta no encontrada."}, status=404)
+
+    def handle_admin_login(self) -> None:
+        payload = read_json_body(self)
+        username = str(payload.get("username", "")).strip()
+        password = str(payload.get("password", ""))
+        allowed_passwords = ADMIN_USERS.get(username)
+        if not allowed_passwords or password not in allowed_passwords:
+            json_response(self, {"ok": False, "message": "Usuario o contraseña incorrectos."}, status=401)
+            return
+        token = secrets.token_urlsafe(32)
+        ADMIN_SESSIONS.add(token)
+        json_response(self, {"ok": True, "token": token})
 
     def handle_upload(self) -> None:
         form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST"})
@@ -913,8 +1225,7 @@ class AppHandler(BaseHTTPRequestHandler):
         json_response(self, {"ok": True, "message": f"Indice creado con {len(index['chunks'])} fragmentos."})
 
     def handle_ask(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        payload = read_json_body(self)
         question = str(payload.get("question", "")).strip()
         user_name = str(payload.get("user_name", "")).strip()
         if not user_name:
@@ -924,7 +1235,7 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Escribe una pregunta."}, status=400)
             return
         try:
-            result = answer_question_with_sources(question)
+            result = answer_question_with_sources(question, user_name=user_name)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return

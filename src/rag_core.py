@@ -259,7 +259,7 @@ def build_context(matches: list[dict]) -> str:
     )
 
 
-def generate_answer(question: str, matches: list[dict]) -> str:
+def generate_answer(question: str, matches: list[dict], user_name: str = "") -> str:
     load_index()
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
@@ -288,7 +288,7 @@ def generate_answer(question: str, matches: list[dict]) -> str:
                 },
                 {
                     "role": "user",
-                    "content": f"Contexto:\n{context}\n\nPregunta: {question}",
+                    "content": f"Usuario: {user_name or 'Usuario interno'}\n\nContexto:\n{context}\n\nPregunta: {question}",
                 },
             ],
         )
@@ -302,6 +302,6 @@ def answer_question(question: str, top_k: int = 5) -> str:
     return generate_answer(question, matches)
 
 
-def answer_question_with_sources(question: str, top_k: int = 5) -> dict:
+def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "") -> dict:
     matches = retrieve(question, top_k=top_k)
-    return {"answer": generate_answer(question, matches), "sources": matches}
+    return {"answer": generate_answer(question, matches, user_name=user_name), "sources": matches}

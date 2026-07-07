@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .venv/
+work/
 data/index.json
 data/usage_log.db
 data/usage_log.db-*
