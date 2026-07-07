@@ -46,6 +46,21 @@ def get_client():
     return OpenAI()
 
 
+def friendly_openai_error(error: Exception) -> UserFacingError:
+    message = str(error)
+    lowered = message.lower()
+    if "insufficient_quota" in lowered or "exceeded your current quota" in lowered:
+        return UserFacingError(
+            "Tu API key esta bien, pero la cuenta no tiene cuota disponible. "
+            "Revisa billing, saldo o limite mensual en OpenAI Platform."
+        )
+    if "invalid_api_key" in lowered or "incorrect api key" in lowered:
+        return UserFacingError("La API key no es valida. Revisa el valor de OPENAI_API_KEY en .env.")
+    if "model_not_found" in lowered:
+        return UserFacingError("El modelo configurado no esta disponible para esta cuenta. Revisa OPENAI_MODEL en .env.")
+    return UserFacingError(f"OpenAI devolvio un error: {error}")
+
+
 def read_text_file(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
@@ -170,7 +185,10 @@ def embed_texts(client, texts: list[str]) -> list[list[float]]:
     batch_size = 80
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
-        response = client.embeddings.create(model=model, input=batch)
+        try:
+            response = client.embeddings.create(model=model, input=batch)
+        except Exception as error:
+            raise friendly_openai_error(error) from error
         embeddings.extend(item.embedding for item in response.data)
     return embeddings
 
@@ -231,23 +249,26 @@ def answer_question(question: str, top_k: int = 5) -> str:
         f"[Fuente: {match['source']} | fragmento {match['chunk']}]\n{match['text']}"
         for match in matches
     )
-    response = client.responses.create(
-        model=model,
-        input=[
-            {
-                "role": "system",
-                "content": (
-                    "Eres un asistente estricto de una base de conocimiento privada. "
-                    "Responde unicamente con informacion del contexto entregado. "
-                    "Si el contexto no contiene la respuesta, di exactamente: "
-                    "'No encuentro esa informacion en mi base de conocimiento.' "
-                    "Incluye fuentes breves cuando respondas."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Contexto:\n{context}\n\nPregunta: {question}",
-            },
-        ],
-    )
+    try:
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres un asistente estricto de una base de conocimiento privada. "
+                        "Responde unicamente con informacion del contexto entregado. "
+                        "Si el contexto no contiene la respuesta, di exactamente: "
+                        "'No encuentro esa informacion en mi base de conocimiento.' "
+                        "Incluye fuentes breves cuando respondas."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Contexto:\n{context}\n\nPregunta: {question}",
+                },
+            ],
+        )
+    except Exception as error:
+        raise friendly_openai_error(error) from error
     return response.output_text
