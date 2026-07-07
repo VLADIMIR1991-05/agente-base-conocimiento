@@ -76,23 +76,6 @@ Si el contexto no contiene la respuesta, debe decir:
 No encuentro esa informacion en mi base de conocimiento.
 ```
 
-## Subir a GitHub
+## Subir tu base de conocimiento
 
-En esta maquina el GitHub CLI no esta disponible en el PATH normal, asi que deje el proyecto como carpeta lista para subir.
-
-Opcion facil:
-
-1. Crea un repositorio vacio en GitHub, por ejemplo `agente-base-conocimiento`.
-2. Sube todos los archivos de esta carpeta.
-3. No subas `.env`; esta ignorado en `.gitignore`.
-
-Opcion con Git instalado:
-
-```bash
-git init
-git add .
-git commit -m "Crear prototipo RAG para base de conocimiento"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/agente-base-conocimiento.git
-git push -u origin main
-```
+Sube tus documentos a `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.
