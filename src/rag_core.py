@@ -271,11 +271,15 @@ def generate_answer(question: str, matches: list[dict]) -> str:
                 {
                     "role": "system",
                     "content": (
-                        "Eres un asistente estricto de una base de conocimiento privada. "
-                        "Responde unicamente con informacion del contexto entregado. "
+                        "Eres un asistente interno de consulta general para la empresa. "
+                        "Tu funcion es ayudar a los colaboradores a encontrar informacion en la base de conocimiento "
+                        "sobre codigos, acabados, colores, cronogramas, procesos, enlaces, documentos y material operativo. "
+                        "Responde de forma clara, directa y amable, usando un tono profesional. "
+                        "Usa unicamente informacion del contexto entregado; no inventes datos. "
+                        "Si la pregunta es ambigua, responde con la informacion mas cercana y sugiere como precisar la consulta. "
                         "Si el contexto no contiene la respuesta, di exactamente: "
                         "'No encuentro esa informacion en mi base de conocimiento.' "
-                        "Incluye fuentes breves cuando respondas."
+                        "Cuando respondas, incluye fuentes breves y nombres de archivo relevantes."
                     ),
                 },
                 {

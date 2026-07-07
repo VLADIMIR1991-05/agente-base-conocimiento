@@ -6,6 +6,8 @@ import cgi
 import json
 import mimetypes
 import os
+import sqlite3
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -15,6 +17,7 @@ from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingErro
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
+DB_PATH = ROOT / "data" / "usage_log.db"
 
 
 PAGE = r"""<!doctype html>
@@ -142,8 +145,8 @@ PAGE = r"""<!doctype html>
 
     .panel-body { padding: 18px; }
 
-    .drop {
-      border: 1.5px dashed #8db7a9;
+    .control-box {
+      border: 1px solid #cfe4dc;
       border-radius: 8px;
       padding: 18px;
       background: #f4fbf7;
@@ -151,13 +154,16 @@ PAGE = r"""<!doctype html>
       gap: 12px;
     }
 
-    .file-input {
+    .text-input {
       width: 100%;
-      padding: 10px;
+      min-height: 42px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: white;
-      color: var(--muted);
+      color: var(--ink);
+      font: inherit;
+      outline-color: var(--teal);
     }
 
     .btn-row {
@@ -192,6 +198,8 @@ PAGE = r"""<!doctype html>
       display: grid;
       gap: 10px;
       margin-top: 16px;
+      max-height: 320px;
+      overflow-y: auto;
     }
 
     .file {
@@ -224,43 +232,6 @@ PAGE = r"""<!doctype html>
       margin-top: 2px;
       color: var(--muted);
       font-size: 13px;
-    }
-
-    .upload-tabs {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-
-    .upload-choice {
-      position: relative;
-      display: grid;
-      gap: 8px;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: white;
-      cursor: pointer;
-    }
-
-    .upload-choice input {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      cursor: pointer;
-    }
-
-    .upload-choice strong {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 14px;
-    }
-
-    .upload-choice span {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
     }
 
     .chat {
@@ -369,6 +340,28 @@ PAGE = r"""<!doctype html>
       font-weight: 700;
     }
 
+    .report-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      max-height: 210px;
+      overflow-y: auto;
+    }
+
+    .report-item {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .report-item strong {
+      display: block;
+      margin-bottom: 3px;
+    }
+
     @media (max-width: 860px) {
       .topbar { align-items: flex-start; flex-direction: column; }
       .grid { grid-template-columns: 1fr; }
@@ -398,27 +391,24 @@ PAGE = r"""<!doctype html>
           <span class="pill"><i data-lucide="folder-open"></i><span id="fileCount">0</span></span>
         </div>
         <div class="panel-body">
-          <form class="drop" id="uploadForm">
-            <strong>Subir documentos</strong>
-            <div class="upload-tabs">
-              <label class="upload-choice">
-                <input class="file-input" id="fileInput" name="files" type="file" multiple accept=".txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp" />
-                <strong><i data-lucide="files"></i>Archivos</strong>
-                <span>Selecciona documentos sueltos.</span>
-              </label>
-              <label class="upload-choice">
-                <input class="file-input" id="folderInput" type="file" webkitdirectory directory multiple />
-                <strong><i data-lucide="folder-up"></i>Carpeta</strong>
-                <span>Incluye subcarpetas completas.</span>
-              </label>
-            </div>
-            <div class="file-meta" id="selectionMeta">Nada seleccionado.</div>
+          <div class="control-box">
+            <strong>Usuario</strong>
+            <input class="text-input" id="userName" type="text" placeholder="Escribe tu nombre" autocomplete="name" />
+            <div class="file-meta">Este nombre se usa para personalizar respuestas y guardar el informe de consultas.</div>
+          </div>
+          <div class="control-box" style="margin-top: 12px;">
+            <strong>Base local</strong>
+            <div class="file-meta">Copia archivos o carpetas directamente en <strong>knowledge_base</strong> y luego actualiza el indice.</div>
             <div class="btn-row">
-              <button class="secondary" type="submit"><i data-lucide="upload"></i>Subir</button>
               <button class="primary" type="button" id="indexBtn"><i data-lucide="refresh-cw"></i>Crear indice</button>
             </div>
-          </form>
-          <div class="hint">Puedes subir archivos sueltos o carpetas completas. Cuando agregues informacion nueva, crea el indice otra vez.</div>
+          </div>
+          <div class="control-box" style="margin-top: 12px;">
+            <strong>Informe reciente</strong>
+            <div class="file-meta">Ultimas preguntas registradas por usuario.</div>
+            <div class="report-list" id="reportList"></div>
+          </div>
+          <div class="hint">Las preguntas quedan registradas por usuario y fecha para generar informes internos.</div>
           <div class="files" id="files"></div>
         </div>
       </aside>
@@ -429,10 +419,10 @@ PAGE = r"""<!doctype html>
           <span class="pill"><i data-lucide="shield-check"></i>Solo base</span>
         </div>
         <div class="messages" id="messages">
-          <div class="message assistant">Hola. Ya puedo trabajar con la base cargada. Crea el indice y preguntame algo sobre el Excel.</div>
+          <div class="message assistant">Hola. Identificate con tu nombre y preguntame sobre la informacion de la empresa.</div>
         </div>
         <form class="composer" id="askForm">
-          <textarea id="question" placeholder="Escribe una pregunta sobre la guia..." required></textarea>
+          <textarea id="question" placeholder="Escribe una pregunta sobre la empresa..." required></textarea>
           <button class="accent" type="submit"><i data-lucide="send"></i>Preguntar</button>
         </form>
       </section>
@@ -444,10 +434,8 @@ PAGE = r"""<!doctype html>
     const fileCountEl = document.querySelector("#fileCount");
     const statusEl = document.querySelector("#indexStatus span");
     const messagesEl = document.querySelector("#messages");
-    const uploadForm = document.querySelector("#uploadForm");
-    const fileInput = document.querySelector("#fileInput");
-    const folderInput = document.querySelector("#folderInput");
-    const selectionMeta = document.querySelector("#selectionMeta");
+    const reportListEl = document.querySelector("#reportList");
+    const userNameEl = document.querySelector("#userName");
     const indexBtn = document.querySelector("#indexBtn");
     const askForm = document.querySelector("#askForm");
     const questionEl = document.querySelector("#question");
@@ -502,17 +490,6 @@ PAGE = r"""<!doctype html>
       return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
     }
 
-    function describeSelection(input, label) {
-      const files = Array.from(input.files || []);
-      if (!files.length) {
-        selectionMeta.textContent = "Nada seleccionado.";
-        return;
-      }
-      const folders = new Set(files.map((file) => (file.webkitRelativePath || "").split("/")[0]).filter(Boolean));
-      const folderText = folders.size ? ` en ${folders.size} carpeta(s)` : "";
-      selectionMeta.textContent = `${label}: ${files.length} archivo(s)${folderText}.`;
-    }
-
     async function refreshFiles() {
       const response = await fetch("/api/files");
       const data = await response.json();
@@ -534,32 +511,35 @@ PAGE = r"""<!doctype html>
       icons();
     }
 
-    fileInput.addEventListener("change", () => {
-      folderInput.value = "";
-      describeSelection(fileInput, "Archivos");
-    });
-
-    folderInput.addEventListener("change", () => {
-      fileInput.value = "";
-      describeSelection(folderInput, "Carpeta");
-    });
-
-    uploadForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const formData = new FormData();
-      const folderFiles = Array.from(folderInput.files || []);
-      const looseFiles = Array.from(fileInput.files || []);
-      const selectedFiles = folderFiles.length ? folderFiles : looseFiles;
-      for (const file of selectedFiles) {
-        formData.append("files", file, file.webkitRelativePath || file.name);
-      }
-      const response = await fetch("/api/upload", { method: "POST", body: formData });
+    async function refreshReport() {
+      const response = await fetch("/api/report");
       const data = await response.json();
-      addMessage(data.message, data.ok ? "assistant" : "assistant");
-      fileInput.value = "";
-      folderInput.value = "";
-      selectionMeta.textContent = "Nada seleccionado.";
-      await refreshFiles();
+      reportListEl.innerHTML = "";
+      if (!data.interactions.length) {
+        const empty = document.createElement("div");
+        empty.className = "file-meta";
+        empty.textContent = "Todavia no hay consultas registradas.";
+        reportListEl.appendChild(empty);
+        return;
+      }
+      for (const item of data.interactions) {
+        const row = document.createElement("div");
+        row.className = "report-item";
+        const date = new Date(item.created_at);
+        row.innerHTML = `<strong></strong><span></span>`;
+        row.querySelector("strong").textContent = `${item.user_name} - ${date.toLocaleString()}`;
+        row.querySelector("span").textContent = item.question;
+        reportListEl.appendChild(row);
+      }
+    }
+
+    function currentUserName() {
+      return userNameEl.value.trim();
+    }
+
+    userNameEl.value = localStorage.getItem("kb_user_name") || "";
+    userNameEl.addEventListener("input", () => {
+      localStorage.setItem("kb_user_name", currentUserName());
     });
 
     indexBtn.addEventListener("click", async () => {
@@ -576,20 +556,35 @@ PAGE = r"""<!doctype html>
       event.preventDefault();
       const question = questionEl.value.trim();
       if (!question) return;
+      const userName = currentUserName();
+      if (!userName) {
+        addAssistantMessage("Primero escribe tu nombre en el panel de usuario.");
+        userNameEl.focus();
+        return;
+      }
       addMessage(question, "user");
       questionEl.value = "";
       const waiting = addAssistantMessage("Buscando en la base...");
       const response = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ question, user_name: userName })
       });
       const data = await response.json();
       waiting.remove();
       addAssistantMessage(data.answer || data.message, data.images || []);
+      await refreshReport();
+    });
+
+    questionEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        askForm.requestSubmit();
+      }
     });
 
     refreshFiles();
+    refreshReport();
     icons();
   </script>
 </body>
@@ -613,6 +608,63 @@ def page_response(handler: BaseHTTPRequestHandler) -> None:
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def init_db() -> None:
+    DB_PATH.parent.mkdir(exist_ok=True)
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                date TEXT NOT NULL,
+                user_name TEXT NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                sources TEXT NOT NULL,
+                images TEXT NOT NULL
+            )
+            """
+        )
+
+
+def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict]) -> None:
+    init_db()
+    now = datetime.now()
+    source_names = [str(source.get("source", "")) for source in sources if source.get("source")]
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.execute(
+            """
+            INSERT INTO interactions (created_at, date, user_name, question, answer, sources, images)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(timespec="seconds"),
+                now.date().isoformat(),
+                user_name,
+                question,
+                answer,
+                json.dumps(source_names, ensure_ascii=False),
+                json.dumps(images, ensure_ascii=False),
+            ),
+        )
+
+
+def recent_interactions(limit: int = 20) -> list[dict]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT created_at, date, user_name, question, answer, sources
+            FROM interactions
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_files() -> list[dict]:
@@ -654,6 +706,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/files":
             json_response(self, {"files": list_files(), "index_exists": INDEX_PATH.exists()})
+            return
+        if self.path == "/api/report":
+            json_response(self, {"interactions": recent_interactions()})
             return
         if self.path.startswith("/knowledge/"):
             self.handle_knowledge_file()
@@ -735,6 +790,10 @@ class AppHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         question = str(payload.get("question", "")).strip()
+        user_name = str(payload.get("user_name", "")).strip()
+        if not user_name:
+            json_response(self, {"ok": False, "message": "Primero escribe tu nombre para registrar la consulta."}, status=400)
+            return
         if not question:
             json_response(self, {"ok": False, "message": "Escribe una pregunta."}, status=400)
             return
@@ -770,7 +829,9 @@ class AppHandler(BaseHTTPRequestHandler):
             if any(token in combined_text for token in Path(image["name"]).stem.lower().replace("_", " ").split() if len(token) > 2)
         ]
         images = matched_images or image_candidates
-        json_response(self, {"ok": True, "answer": result["answer"], "images": images[:4]})
+        images = images[:4]
+        log_interaction(user_name, question, result["answer"], result["sources"], images)
+        json_response(self, {"ok": True, "answer": result["answer"], "images": images})
 
     def log_message(self, format: str, *args) -> None:
         return

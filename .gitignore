@@ -3,5 +3,10 @@ __pycache__/
 *.pyc
 .venv/
 data/index.json
+data/usage_log.db
+data/usage_log.db-*
+knowledge_base/*
+!knowledge_base/.gitkeep
+!knowledge_base/urls.txt
 ~$*
 knowledge_base/~$*
