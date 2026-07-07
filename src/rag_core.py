@@ -1,16 +1,10 @@
+from __future__ import annotations
+
 import json
 import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-
-import requests
-from bs4 import BeautifulSoup
-from docx import Document as WordDocument
-from dotenv import load_dotenv
-from openai import OpenAI
-from openpyxl import load_workbook
-from pptx import Presentation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,10 +22,16 @@ class TextDocument:
 
 
 def load_settings() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
     load_dotenv(ROOT / ".env")
 
 
 def get_client() -> OpenAI:
+    from openai import OpenAI
+
     load_settings()
     return OpenAI()
 
@@ -41,6 +41,8 @@ def read_text_file(path: Path) -> str:
 
 
 def read_docx(path: Path) -> str:
+    from docx import Document as WordDocument
+
     document = WordDocument(path)
     paragraphs = [p.text.strip() for p in document.paragraphs if p.text.strip()]
     tables = []
@@ -53,6 +55,8 @@ def read_docx(path: Path) -> str:
 
 
 def read_xlsx(path: Path) -> str:
+    from openpyxl import load_workbook
+
     workbook = load_workbook(path, read_only=True, data_only=True)
     parts = []
     for sheet in workbook.worksheets:
@@ -65,6 +69,8 @@ def read_xlsx(path: Path) -> str:
 
 
 def read_pptx(path: Path) -> str:
+    from pptx import Presentation
+
     presentation = Presentation(path)
     parts = []
     for index, slide in enumerate(presentation.slides, start=1):
@@ -78,6 +84,9 @@ def read_pptx(path: Path) -> str:
 
 
 def read_web_page(url: str) -> str:
+    import requests
+    from bs4 import BeautifulSoup
+
     response = requests.get(url, timeout=20, headers={"User-Agent": "kb-rag-prototype/1.0"})
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")

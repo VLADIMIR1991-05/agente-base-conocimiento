@@ -53,7 +53,23 @@ OPENAI_MODEL=gpt-5.5
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-## Probar
+## Probar con interfaz web
+
+Abre la pantalla moderna del agente:
+
+```bash
+python src/web_app.py
+```
+
+Luego entra a:
+
+```text
+http://127.0.0.1:8000
+```
+
+Desde la pantalla puedes ver la base cargada, subir documentos, crear el indice y preguntar.
+
+## Probar por consola
 
 Primero crea el indice:
 

@@ -1,5 +1,0 @@
-Politica de ejemplo para pruebas
-
-El horario de atencion del centro de soporte es de lunes a viernes de 09:00 a 18:00.
-El correo oficial de soporte es soporte@empresa-ejemplo.com.
-Las solicitudes urgentes deben marcarse con prioridad alta e incluir el nombre del responsable.
