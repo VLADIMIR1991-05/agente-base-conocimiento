@@ -4,16 +4,17 @@ warnings.simplefilter("ignore", DeprecationWarning)
 
 import cgi
 import json
+import mimetypes
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
-from rag_core import INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question, build_index
+from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question_with_sources, build_index
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx"}
+ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
 
 
 PAGE = r"""<!doctype html>
@@ -293,6 +294,30 @@ PAGE = r"""<!doctype html>
       border: 1px solid #cfece0;
     }
 
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .image-result {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      text-decoration: none;
+    }
+
+    .image-result img {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+
     .user {
       align-self: flex-end;
       color: white;
@@ -377,7 +402,7 @@ PAGE = r"""<!doctype html>
             <strong>Subir documentos</strong>
             <div class="upload-tabs">
               <label class="upload-choice">
-                <input class="file-input" id="fileInput" name="files" type="file" multiple accept=".txt,.md,.docx,.xlsx,.pptx" />
+                <input class="file-input" id="fileInput" name="files" type="file" multiple accept=".txt,.md,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp" />
                 <strong><i data-lucide="files"></i>Archivos</strong>
                 <span>Selecciona documentos sueltos.</span>
               </label>
@@ -437,6 +462,38 @@ PAGE = r"""<!doctype html>
       el.textContent = text;
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
+      return el;
+    }
+
+    function addAssistantMessage(text, images = []) {
+      const el = document.createElement("div");
+      el.className = "message assistant";
+      const textEl = document.createElement("div");
+      textEl.textContent = text;
+      el.appendChild(textEl);
+      if (images.length) {
+        const grid = document.createElement("div");
+        grid.className = "image-grid";
+        for (const image of images) {
+          const item = document.createElement("a");
+          item.className = "image-result";
+          item.href = image.url;
+          item.target = "_blank";
+          item.rel = "noopener";
+          const img = document.createElement("img");
+          img.src = image.url;
+          img.alt = image.name;
+          const caption = document.createElement("span");
+          caption.textContent = image.name;
+          item.appendChild(img);
+          item.appendChild(caption);
+          grid.appendChild(item);
+        }
+        el.appendChild(grid);
+      }
+      messagesEl.appendChild(el);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return el;
     }
 
     function humanSize(bytes) {
@@ -466,7 +523,7 @@ PAGE = r"""<!doctype html>
         const row = document.createElement("div");
         row.className = "file";
         row.innerHTML = `
-          <div class="file-icon"><i data-lucide="file-spreadsheet"></i></div>
+          <div class="file-icon"><i data-lucide="${file.is_image ? "image" : "file-text"}"></i></div>
           <div>
             <div class="file-name"></div>
             <div class="file-meta">${humanSize(file.size)} - ${file.extension}</div>
@@ -521,15 +578,15 @@ PAGE = r"""<!doctype html>
       if (!question) return;
       addMessage(question, "user");
       questionEl.value = "";
-      const waiting = "Buscando en la base...";
-      addMessage(waiting, "assistant");
+      const waiting = addAssistantMessage("Buscando en la base...");
       const response = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question })
       });
       const data = await response.json();
-      messagesEl.lastChild.textContent = data.answer || data.message;
+      waiting.remove();
+      addAssistantMessage(data.answer || data.message, data.images || []);
     });
 
     refreshFiles();
@@ -562,7 +619,7 @@ def list_files() -> list[dict]:
     KNOWLEDGE_DIR.mkdir(exist_ok=True)
     files = []
     for path in sorted(KNOWLEDGE_DIR.rglob("*")):
-        if not path.is_file() or path.name.startswith(".") or path.name == "urls.txt":
+        if not path.is_file() or path.name.startswith(".") or path.name.startswith("~$") or path.name == "urls.txt":
             continue
         relative_path = path.relative_to(KNOWLEDGE_DIR)
         files.append(
@@ -571,6 +628,7 @@ def list_files() -> list[dict]:
                 "path": str(relative_path).replace("\\", "/"),
                 "size": path.stat().st_size,
                 "extension": path.suffix.lower() or "archivo",
+                "is_image": path.suffix.lower() in IMAGE_FILE_TYPES,
             }
         )
     return files
@@ -597,7 +655,28 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/files":
             json_response(self, {"files": list_files(), "index_exists": INDEX_PATH.exists()})
             return
+        if self.path.startswith("/knowledge/"):
+            self.handle_knowledge_file()
+            return
         json_response(self, {"ok": False, "message": "Ruta no encontrada."}, status=404)
+
+    def handle_knowledge_file(self) -> None:
+        relative = safe_relative_path(self.path.removeprefix("/knowledge/"))
+        if relative is None:
+            json_response(self, {"ok": False, "message": "Archivo no encontrado."}, status=404)
+            return
+        target = (KNOWLEDGE_DIR / relative).resolve()
+        root = KNOWLEDGE_DIR.resolve()
+        if root not in target.parents or not target.exists() or not target.is_file():
+            json_response(self, {"ok": False, "message": "Archivo no encontrado."}, status=404)
+            return
+        mime_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:
         if self.path == "/api/upload":
@@ -660,14 +739,38 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Escribe una pregunta."}, status=400)
             return
         try:
-            answer = answer_question(question)
+            result = answer_question_with_sources(question)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return
         except Exception as error:
             json_response(self, {"ok": False, "message": f"No pude responder todavia. Revisa la configuracion e intenta otra vez. Detalle: {error}"}, status=500)
             return
-        json_response(self, {"ok": True, "answer": answer})
+        image_candidates = []
+        seen = set()
+        combined_text = f"{question} {result['answer']}".lower()
+        for source in result["sources"]:
+            source_path = str(source.get("source", ""))
+            extension = Path(source_path).suffix.lower()
+            if extension not in IMAGE_FILE_TYPES or source_path in seen:
+                continue
+            seen.add(source_path)
+            normalized_source = source_path.replace("\\", "/")
+            relative_source = normalized_source.removeprefix("knowledge_base/")
+            image_candidates.append(
+                {
+                    "name": Path(source_path).name,
+                    "path": source_path,
+                    "url": "/knowledge/" + quote(relative_source, safe="/"),
+                }
+            )
+        matched_images = [
+            image
+            for image in image_candidates
+            if any(token in combined_text for token in Path(image["name"]).stem.lower().replace("_", " ").split() if len(token) > 2)
+        ]
+        images = matched_images or image_candidates
+        json_response(self, {"ok": True, "answer": result["answer"], "images": images[:4]})
 
     def log_message(self, format: str, *args) -> None:
         return

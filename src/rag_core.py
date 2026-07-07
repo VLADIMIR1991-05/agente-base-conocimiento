@@ -12,7 +12,8 @@ KNOWLEDGE_DIR = ROOT / "knowledge_base"
 DATA_DIR = ROOT / "data"
 INDEX_PATH = DATA_DIR / "index.json"
 
-SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx"}
+IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
 
 
 class UserFacingError(RuntimeError):
@@ -108,6 +109,15 @@ def read_pptx(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def read_image(path: Path) -> str:
+    label = path.stem.replace("_", " ").replace("-", " ").strip()
+    return (
+        f"Imagen disponible en la base de conocimiento. "
+        f"Nombre o color asociado: {label}. "
+        f"Archivo: {path.name}."
+    )
+
+
 def read_web_page(url: str) -> str:
     import requests
     from bs4 import BeautifulSoup
@@ -125,7 +135,7 @@ def read_web_page(url: str) -> str:
 def load_local_documents() -> list[TextDocument]:
     documents = []
     for path in KNOWLEDGE_DIR.rglob("*"):
-        if not path.is_file() or path.name == "urls.txt":
+        if not path.is_file() or path.name == "urls.txt" or path.name.startswith("~$"):
             continue
         if path.suffix.lower() not in SUPPORTED_FILE_TYPES:
             continue
@@ -138,6 +148,8 @@ def load_local_documents() -> list[TextDocument]:
             text = read_xlsx(path)
         elif path.suffix.lower() == ".pptx":
             text = read_pptx(path)
+        elif path.suffix.lower() in IMAGE_FILE_TYPES:
+            text = read_image(path)
         else:
             text = ""
 
@@ -240,15 +252,18 @@ def retrieve(question: str, top_k: int = 5) -> list[dict]:
     return sorted(scored, key=lambda item: item["score"], reverse=True)[:top_k]
 
 
-def answer_question(question: str, top_k: int = 5) -> str:
-    load_index()
-    client = get_client()
-    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
-    matches = retrieve(question, top_k=top_k)
-    context = "\n\n".join(
+def build_context(matches: list[dict]) -> str:
+    return "\n\n".join(
         f"[Fuente: {match['source']} | fragmento {match['chunk']}]\n{match['text']}"
         for match in matches
     )
+
+
+def generate_answer(question: str, matches: list[dict]) -> str:
+    load_index()
+    client = get_client()
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+    context = build_context(matches)
     try:
         response = client.responses.create(
             model=model,
@@ -272,3 +287,13 @@ def answer_question(question: str, top_k: int = 5) -> str:
     except Exception as error:
         raise friendly_openai_error(error) from error
     return response.output_text
+
+
+def answer_question(question: str, top_k: int = 5) -> str:
+    matches = retrieve(question, top_k=top_k)
+    return generate_answer(question, matches)
+
+
+def answer_question_with_sources(question: str, top_k: int = 5) -> dict:
+    matches = retrieve(question, top_k=top_k)
+    return {"answer": generate_answer(question, matches), "sources": matches}
