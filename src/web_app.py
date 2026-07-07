@@ -1275,9 +1275,10 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
 def run() -> None:
+    host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
-
-    print(f"Interfaz lista en http://127.0.0.1:{port}")
+    server = ThreadingHTTPServer((host, port), AppHandler)
+    print(f"Interfaz lista en http://{host}:{port}")
     server.serve_forever()
 
 
