@@ -49,7 +49,7 @@ Edita `.env`:
 
 ```text
 OPENAI_API_KEY=tu_api_key_real
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-5.4-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
@@ -67,7 +67,7 @@ Luego entra a:
 http://127.0.0.1:8000
 ```
 
-Desde la pantalla puedes ver la base cargada, subir documentos, crear el indice y preguntar.
+La interfaz abre el chat del agente, solicita el nombre del usuario antes de empezar y guarda internamente el historial de preguntas y respuestas para reportes.
 
 ## Probar por consola
 
@@ -95,3 +95,12 @@ No encuentro esa informacion en mi base de conocimiento.
 ## Subir tu base de conocimiento
 
 Sube tus documentos a `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.
+
+## Compartir online
+
+GitHub Pages solo puede mostrar contenido estatico, por eso este proyecto se comparte mejor en un hosting Python. El repositorio ya incluye `render.yaml` para desplegarlo en Render sin cambiar el flujo local.
+
+1. En Render, crea un nuevo servicio web desde este repositorio.
+2. Deja que Render lea `render.yaml`.
+3. Configura `OPENAI_API_KEY` como variable secreta.
+4. Si vas a usar tu base real en nube, sube los archivos al proyecto desplegado o conecta almacenamiento persistente.
