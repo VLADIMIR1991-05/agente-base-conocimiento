@@ -10,7 +10,7 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: OPENAI_MODEL
-        value: gpt-5.4-mini
+        value: gpt-5.4
       - key: OPENAI_EMBEDDING_MODEL
         value: text-embedding-3-small
       - key: OPENAI_API_KEY

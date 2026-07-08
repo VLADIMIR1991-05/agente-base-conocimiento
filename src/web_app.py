@@ -282,31 +282,47 @@ PAGE = r"""<!doctype html>
     .message-table-wrap {
       max-width: 100%;
       overflow-x: auto;
-      margin: 10px 0;
+      margin: 12px 0;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: white;
+      box-shadow: 0 8px 22px rgba(10, 74, 66, 0.08);
     }
 
     .message table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 420px;
+      min-width: 560px;
       font-size: 14px;
+      line-height: 1.35;
     }
 
     .message th,
     .message td {
-      padding: 9px 10px;
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: top;
+      overflow-wrap: normal;
+      word-break: normal;
     }
 
     .message th {
-      background: #f4fbf7;
+      background: #edf8f3;
       color: var(--teal-dark);
       font-weight: 800;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      white-space: nowrap;
+    }
+
+    .message tbody tr:nth-child(even) td { background: #fbfefd; }
+
+    .message td:first-child,
+    .message th:first-child {
+      font-weight: 750;
+      color: #063f39;
     }
 
     .message tr:last-child td { border-bottom: 0; }

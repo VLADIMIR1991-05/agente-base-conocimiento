@@ -56,7 +56,7 @@ Edita `.env`:
 
 ```text
 OPENAI_API_KEY=tu_api_key_real
-OPENAI_MODEL=gpt-5.4-mini
+OPENAI_MODEL=gpt-5.4
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
