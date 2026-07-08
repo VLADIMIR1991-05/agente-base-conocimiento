@@ -405,6 +405,18 @@ def extract_shelf_count(code: str) -> int:
     return max(counts) if counts else 0
 
 
+def module_without_top(code: str) -> bool:
+    clean = normalize_code(code)
+    compact = clean.replace(" ", "").replace("_", "-")
+    no_top_markers = {"S/T", "SINTECHO", "SIN-TECHO", "NO-TECHO", "NOTECHO"}
+    return any(marker in compact for marker in no_top_markers)
+
+
+def posterior_adjustment_count(dims: ModuleDimensions) -> int:
+    h5_height = extract_height_mm("H5") or 950
+    return 2 if dims.alto >= h5_height else 1
+
+
 def build_piece_rows(code: str) -> list[dict[str, str | int]]:
     dims = dimensions_from_code(code)
     if not dims.ancho or not dims.alto or not dims.profundidad:
@@ -414,17 +426,33 @@ def build_piece_rows(code: str) -> list[dict[str, str | int]]:
     back_thickness = 6
     internal_width = dims.ancho - (thickness * 2) - 1
     depth = dims.profundidad_estructura or dims.profundidad
+    adjustment_width = 80
+    has_top = not module_without_top(code)
     rows: list[dict[str, str | int]] = [
         {"pieza": "Lateral", "cantidad": 2, "medida": f"{dims.alto} x {depth} mm", "regla": "alto x profundidad del modulo"},
         {"pieza": "Base", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"},
-        {"pieza": "Techo", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"},
-        {
-            "pieza": "Respaldo",
-            "cantidad": 1,
-            "medida": f"{dims.ancho - (thickness * 2) + 10} x {dims.alto - (thickness * 2) + 10} mm",
-            "regla": f"descuenta laterales de {thickness}mm y suma ranura; respaldo base {back_thickness}mm",
-        },
     ]
+    if has_top:
+        rows.append({"pieza": "Techo", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"})
+    else:
+        rows.append({"pieza": "Ajuste superior", "cantidad": 2, "medida": f"{internal_width} x {adjustment_width} mm", "regla": "reemplaza el techo cuando el modulo va sin techo"})
+
+    rows.extend(
+        [
+            {
+                "pieza": "Ajuste posterior",
+                "cantidad": posterior_adjustment_count(dims),
+                "medida": f"{internal_width} x {adjustment_width} mm",
+                "regla": "va en todo modulo; hasta H4 usa 1 ajuste y desde H5 usa 2 ajustes",
+            },
+            {
+                "pieza": "Respaldo",
+                "cantidad": 1,
+                "medida": f"{dims.ancho - (thickness * 2) + 10} x {dims.alto - (thickness * 2) + 10} mm",
+                "regla": f"descuenta laterales de {thickness}mm y suma ranura; respaldo base {back_thickness}mm",
+            },
+        ]
+    )
 
     shelf_count = extract_shelf_count(code)
     if shelf_count:
