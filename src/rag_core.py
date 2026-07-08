@@ -4,17 +4,24 @@ import json
 import math
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+
+from verificar_knowledge import DB as VERIFICAR_DB
+from verificar_knowledge import answer_verificar_question
 
 
 ROOT = Path(__file__).resolve().parents[1]
 KNOWLEDGE_DIR = ROOT / "knowledge_base"
 DATA_DIR = ROOT / "data"
 INDEX_PATH = DATA_DIR / "index.json"
+LINKS_DIR = KNOWLEDGE_DIR / "links"
 
 IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
-SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
+DOCUMENT_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf"}
+CODE_FILE_TYPES = {".js", ".json"}
+SUPPORTED_FILE_TYPES = DOCUMENT_FILE_TYPES | CODE_FILE_TYPES | IMAGE_FILE_TYPES
 
 
 class UserFacingError(RuntimeError):
@@ -110,6 +117,21 @@ def read_pptx(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def read_pdf(path: Path) -> str:
+    try:
+        from pypdf import PdfReader
+    except ModuleNotFoundError as error:
+        raise UserFacingError("Falta pypdf para leer PDF. Ejecuta: pip install -r requirements.txt") from error
+
+    reader = PdfReader(str(path))
+    pages = []
+    for index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        if text.strip():
+            pages.append(f"Pagina {index}\n{text.strip()}")
+    return "\n\n".join(pages)
+
+
 def read_image(path: Path) -> str:
     label = path.stem.replace("_", " ").replace("-", " ").strip()
     return (
@@ -134,6 +156,8 @@ def read_web_page(url: str) -> str:
 
 
 def load_local_documents() -> list[TextDocument]:
+    # BLOQUE 1: carga de archivos locales por tipo.
+    # Para agregar un formato nuevo, agrega su extension arriba y su lector aqui.
     documents = []
     for path in KNOWLEDGE_DIR.rglob("*"):
         if not path.is_file() or path.name == "urls.txt" or path.name.startswith("~$"):
@@ -141,7 +165,7 @@ def load_local_documents() -> list[TextDocument]:
         if path.suffix.lower() not in SUPPORTED_FILE_TYPES:
             continue
 
-        if path.suffix.lower() in {".txt", ".md"}:
+        if path.suffix.lower() in {".txt", ".md", ".js"}:
             text = read_text_file(path)
         elif path.suffix.lower() == ".docx":
             text = read_docx(path)
@@ -149,6 +173,8 @@ def load_local_documents() -> list[TextDocument]:
             text = read_xlsx(path)
         elif path.suffix.lower() == ".pptx":
             text = read_pptx(path)
+        elif path.suffix.lower() == ".pdf":
+            text = read_pdf(path)
         elif path.suffix.lower() in IMAGE_FILE_TYPES:
             text = read_image(path)
         else:
@@ -175,6 +201,41 @@ def load_web_documents() -> list[TextDocument]:
         if text.strip():
             documents.append(TextDocument(source=url, text=text))
     return documents
+
+
+def load_resource_links() -> list[dict]:
+    # BLOQUE 2: base liviana de enlaces.
+    # Edita knowledge_base/links/*.json para agregar imagenes, videos, presentaciones o documentos por URL.
+    resources = []
+    if not LINKS_DIR.exists():
+        return resources
+
+    for path in sorted(LINKS_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        items = payload.get("resources", payload if isinstance(payload, list) else [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url", "")).strip()
+            if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+                continue
+            resources.append(
+                {
+                    "source": str(path.relative_to(ROOT)),
+                    "kind": str(item.get("kind") or payload.get("kind") or path.stem).strip(),
+                    "title": str(item.get("title", "")).strip(),
+                    "description": str(item.get("description", "")).strip(),
+                    "url": url,
+                    "aliases": item.get("aliases", []),
+                    "code": str(item.get("code", "")).strip(),
+                }
+            )
+    return resources
 
 
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 180) -> list[str]:
@@ -266,25 +327,267 @@ def strip_visible_sources(text: str) -> str:
     return cleaned.strip()
 
 
-def format_conversation_history(history: list[dict]) -> str:
+def normalize_search_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", str(text or "").lower())
+    normalized = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    return re.sub(r"[^a-z0-9]+", " ", normalized)
+
+
+def search_tokens(text: str) -> set[str]:
+    ignored = {
+        "aqui",
+        "color",
+        "como",
+        "con",
+        "cual",
+        "cuales",
+        "dame",
+        "de",
+        "del",
+        "el",
+        "en",
+        "es",
+        "esta",
+        "este",
+        "la",
+        "las",
+        "lo",
+        "los",
+        "me",
+        "muestra",
+        "muestrame",
+        "para",
+        "que",
+        "quiero",
+        "un",
+        "una",
+        "ver",
+    }
+    return {
+        token
+        for token in normalize_search_text(text).split()
+        if len(token) > 2 and token not in ignored
+    }
+
+
+def history_text(history: list[dict] | None, limit: int = 4) -> str:
     if not history:
-        return "Sin historial previo."
-    turns = []
-    for item in history[-6:]:
-        previous_question = str(item.get("question", "")).strip()
-        previous_answer = str(item.get("answer", "")).strip()
-        if not previous_question and not previous_answer:
-            continue
-        turns.append(f"Pregunta anterior: {previous_question}\nRespuesta anterior: {previous_answer}")
-    return "\n\n".join(turns) if turns else "Sin historial previo."
+        return ""
+    parts = []
+    for item in history[-limit:]:
+        question = str(item.get("question", "")).strip()
+        answer = str(item.get("answer", "")).strip()
+        if question:
+            parts.append(f"Pregunta anterior: {question}")
+        if answer:
+            parts.append(f"Respuesta anterior: {answer[:500]}")
+    return "\n".join(parts)
 
 
-def generate_answer(question: str, matches: list[dict], user_name: str = "", conversation_history: list[dict] | None = None) -> str:
+def contextual_question(question: str, history: list[dict] | None = None) -> str:
+    # BLOQUE 3: continuidad de conversacion.
+    # Solo une historial cuando la pregunta actual parece seguimiento del mismo tema.
+    current = str(question or "").strip()
+    context = history_text(history)
+    if not context:
+        return current
+    normalized = normalize_search_text(current)
+    followup_markers = {"ese", "esa", "eso", "este", "esta", "estos", "estas", "tambien", "igual", "mismo", "misma", "video", "imagen", "link", "enlace", "documento", "presentacion"}
+    current_tokens = set(normalized.split())
+
+    if not current_tokens.intersection(followup_markers):
+        return current
+
+    previous_tokens = search_tokens(context)
+    meaningful_current = search_tokens(current) - followup_markers
+    if meaningful_current and not meaningful_current.intersection(previous_tokens):
+        return current
+
+    if len(current_tokens) <= 7 or current_tokens.intersection(followup_markers):
+        return f"{context}\nPregunta actual: {current}"
+    return current
+
+
+def retrieve_resource_links(question: str, top_k: int = 6) -> list[dict]:
+    tokens = search_tokens(question)
+    if not tokens:
+        return []
+
+    matches = []
+    for resource in load_resource_links():
+        aliases = resource.get("aliases", [])
+        alias_text = " ".join(str(alias) for alias in aliases) if isinstance(aliases, list) else str(aliases)
+        searchable = " ".join(
+            [
+                str(resource.get("kind", "")),
+                str(resource.get("title", "")),
+                str(resource.get("description", "")),
+                str(resource.get("code", "")),
+                alias_text,
+                str(resource.get("url", "")),
+            ]
+        )
+        normalized = normalize_search_text(searchable)
+        score = sum(3 if token in normalize_search_text(str(resource.get("title", ""))) else 1 for token in tokens if token in normalized)
+        if score:
+            matches.append(
+                {
+                    "source": resource["source"],
+                    "chunk": 1,
+                    "text": f"{resource['title']} - {resource['url']}",
+                    "score": float(score),
+                    "kind": "resource_link",
+                    "resource_kind": resource.get("kind", ""),
+                    "title": resource.get("title", ""),
+                    "description": resource.get("description", ""),
+                    "url": resource.get("url", ""),
+                    "code": resource.get("code", ""),
+                }
+            )
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
+def wants_external_link(question: str) -> bool:
+    tokens = set(normalize_search_text(question).split())
+    return bool(
+        tokens.intersection(
+            {
+                "enlace",
+                "enlaces",
+                "link",
+                "links",
+                "url",
+                "video",
+                "videos",
+                "imagen",
+                "imagenes",
+                "foto",
+                "fotos",
+                "presentacion",
+                "presentaciones",
+                "powerpoint",
+                "ppt",
+                "pptx",
+            }
+        )
+    )
+
+
+def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
+    # BLOQUE 4: busqueda local rapida sin embeddings.
+    # Prioriza enlaces organizados, luego DB de VERIFICAR, luego documentos locales.
+    tokens = search_tokens(question)
+    if not tokens:
+        return []
+
+    matches = retrieve_resource_links(question, top_k=top_k)
+    if matches:
+        return matches
+
+    for code, description in VERIFICAR_DB.items():
+        searchable = f"{code} {description}"
+        normalized = normalize_search_text(searchable)
+        score = sum(4 if token in normalize_search_text(code) else 1 for token in tokens if token in normalized)
+        if score:
+            matches.append(
+                {
+                    "source": "knowledge_base/verificar/db_codigos.js",
+                    "chunk": 1,
+                    "text": f"Codigo {code}: {description}",
+                    "score": float(score),
+                    "kind": "verificar_db",
+                    "code": code,
+                    "description": description,
+                }
+            )
+
+    if matches:
+        return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+    for document in load_local_documents():
+        for index, chunk in enumerate(chunk_text(document.text, chunk_size=900, overlap=100), start=1):
+            normalized = normalize_search_text(chunk)
+            score = sum(1 for token in tokens if token in normalized)
+            if score:
+                matches.append(
+                    {
+                        "source": document.source,
+                        "chunk": index,
+                        "text": chunk,
+                        "score": float(score),
+                        "kind": "local_document",
+                    }
+                )
+
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
+def generate_local_answer(question: str, matches: list[dict]) -> str:
+    if not matches:
+        return "No encuentro esa informacion en mi base de conocimiento."
+
+    link_matches = [match for match in matches if match.get("kind") == "resource_link"]
+    if link_matches:
+        lines = ["Encontré estos enlaces listos para abrir:", ""]
+        lines.append("| Tipo | Recurso | Enlace |")
+        lines.append("|---|---|---|")
+        seen_urls = set()
+        for match in link_matches[:6]:
+            url = str(match.get("url", ""))
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            kind = str(match.get("resource_kind", "")).replace("|", "/") or "link"
+            title = str(match.get("title", "")).replace("|", "/") or url
+            lines.append(f"| {kind} | {title} | {url} |")
+        return "\n".join(lines)
+
+    verificar_matches = [match for match in matches if match.get("kind") == "verificar_db"]
+    if verificar_matches:
+        lines = ["Encontré esta información en la base de VERIFICAR:", ""]
+        lines.append("| Codigo | Descripcion |")
+        lines.append("|---|---|")
+        seen_codes = set()
+        for match in verificar_matches[:8]:
+            code = str(match.get("code", ""))
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            description = str(match.get("description", "")).replace("|", "/")
+            lines.append(f"| {code} | {description} |")
+        if "muestr" in normalize_search_text(question) and not any(Path(str(match.get("source", ""))).suffix.lower() in IMAGE_FILE_TYPES for match in matches):
+            lines.append("")
+            lines.append("No tengo una imagen asociada a esa busqueda en la base; solo encontre la referencia textual.")
+        return "\n".join(lines)
+
+    best = matches[0]
+    snippet = " ".join(str(best.get("text", "")).split())
+    if len(snippet) > 700:
+        snippet = snippet[:700].rsplit(" ", 1)[0] + "..."
+    return f"Encontré esto en la base de conocimiento:\n\n{snippet}"
+
+
+def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dict] | None = None) -> dict:
+    search_question = contextual_question(question, history)
+    if wants_external_link(question):
+        link_matches = retrieve_resource_links(search_question, top_k=top_k)
+        if link_matches:
+            return {"answer": generate_local_answer(question, link_matches), "sources": link_matches}
+        return {
+            "answer": "No tengo un enlace abierto para esa consulta todavia. Puedes agregarlo en `knowledge_base/links/` y lo entregare directamente la proxima vez.",
+            "sources": [],
+        }
+
+    matches = retrieve_local(search_question, top_k=top_k)
+    return {"answer": generate_local_answer(question, matches), "sources": matches}
+
+
+def generate_answer(question: str, matches: list[dict], user_name: str = "", history: list[dict] | None = None) -> str:
+    # BLOQUE 5: respuesta con RAG/OpenAI cuando existe indice y API key.
     load_index()
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
     context = build_context(matches)
-    history_text = format_conversation_history(conversation_history or [])
     try:
         response = client.responses.create(
             model=model,
@@ -313,9 +616,9 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "", con
                     "role": "user",
                     "content": (
                         f"Usuario: {user_name or 'Usuario interno'}\n\n"
-                        f"Historial reciente de este usuario:\n{history_text}\n\n"
-                        f"Contexto de la base de conocimiento:\n{context}\n\n"
-                        f"Pregunta actual: {question}"
+                        f"Historial reciente:\n{history_text(history) or 'Sin historial reciente.'}\n\n"
+                        f"Contexto:\n{context}\n\n"
+                        f"Pregunta: {question}"
                     ),
                 },
             ],
@@ -326,24 +629,31 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "", con
 
 
 def answer_question(question: str, top_k: int = 5) -> str:
-    matches = retrieve(question, top_k=top_k)
-    return generate_answer(question, matches)
+    if wants_external_link(question):
+        return answer_with_local_knowledge(question, top_k=top_k)["answer"]
+
+    verificar_result = answer_verificar_question(question)
+    if verificar_result:
+        return verificar_result["answer"]
+
+    try:
+        matches = retrieve(question, top_k=top_k)
+        return generate_answer(question, matches)
+    except UserFacingError:
+        return answer_with_local_knowledge(question, top_k=top_k)["answer"]
 
 
-def answer_question_with_sources(
-    question: str,
-    top_k: int = 5,
-    user_name: str = "",
-    conversation_history: list[dict] | None = None,
-) -> dict:
-    retrieval_question = question
-    if conversation_history:
-        history_for_search = " ".join(
-            f"{item.get('question', '')} {item.get('answer', '')}" for item in conversation_history[-3:]
-        )
-        retrieval_question = f"{history_for_search}\n{question}"
-    matches = retrieve(retrieval_question, top_k=top_k)
-    return {
-        "answer": generate_answer(question, matches, user_name=user_name, conversation_history=conversation_history),
-        "sources": matches,
-    }
+def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "", history: list[dict] | None = None) -> dict:
+    if wants_external_link(question):
+        return answer_with_local_knowledge(question, top_k=top_k, history=history)
+
+    contextual = contextual_question(question, history)
+    verificar_result = answer_verificar_question(contextual)
+    if verificar_result:
+        return verificar_result
+
+    try:
+        matches = retrieve(contextual, top_k=top_k)
+        return {"answer": generate_answer(question, matches, user_name=user_name, history=history), "sources": matches}
+    except UserFacingError:
+        return answer_with_local_knowledge(question, top_k=top_k, history=history)
