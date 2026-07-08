@@ -411,7 +411,7 @@ def has_token(code: str, token: str) -> bool:
 
 
 def extract_shelf_count(code: str) -> int:
-    counts = [int(match.group(1)) for match in re.finditer(r"(\d+)R(?:P|EP)?", normalize_code(code))]
+    counts = [int(match.group(1)) for match in re.finditer(r"(?<!H)(\d+)R(?:P|EP)?", normalize_code(code))]
     return max(counts) if counts else 0
 
 
@@ -448,7 +448,7 @@ def has_tpm(code: str) -> bool:
 
 def requested_structure_thickness(text: str) -> int:
     clean = normalize_code(text)
-    match = re.search(r"(?:ESPESOR|ESP|MATERIAL|CASCO|ESTRUCTURA)?\s*(15|18)\s*MM?", clean)
+    match = re.search(r"(?:ESPESOR|ESP|MATERIAL|CASCO|ESTRUCTURA|DE|EN)?\s*\b(15|18)\b\s*(?:MM?)?", clean)
     return int(match.group(1)) if match else 0
 
 
@@ -557,11 +557,15 @@ def extract_possible_code(question: str) -> str:
         "QUIERO",
         "VALIDAR",
     }
-    for candidate in sorted(candidates, key=len, reverse=True):
+    clean_candidates = [candidate.strip(".,;:") for candidate in candidates if candidate.strip(".,;:") not in stopwords]
+    digit_candidates = [candidate for candidate in clean_candidates if re.search(r"\d", candidate)]
+    db_candidates = [candidate for candidate in clean_candidates if candidate in DB]
+    for candidate in sorted(digit_candidates, key=len, reverse=True):
+        return candidate
+    for candidate in sorted(db_candidates, key=len, reverse=True):
         if candidate in stopwords:
             continue
-        if re.search(r"\d", candidate) or candidate in DB:
-            return candidate.strip(".,;:")
+        return candidate
     return ""
 
 
@@ -579,7 +583,13 @@ def looks_like_verificar_question(question: str) -> bool:
 def wants_piece_breakdown(question: str) -> bool:
     lowered = str(question or "").lower()
     keywords = (
+        "despiece",
         "despiez",
+        "despiec",
+        "despic",
+        "despis",
+        "despies",
+        "despise",
         "desglos",
         "pieza",
         "piezas",

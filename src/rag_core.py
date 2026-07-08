@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from verificar_knowledge import DB as VERIFICAR_DB
-from verificar_knowledge import answer_verificar_question, extract_possible_code
+from verificar_knowledge import answer_verificar_question, dimensions_from_code, extract_possible_code
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -455,9 +455,17 @@ def latest_code_from_history(history: list[dict] | None) -> str:
     if not history:
         return ""
     for item in reversed(history):
+        for value in (str(item.get("question", "")), str(item.get("answer", ""))):
+            candidates = re.findall(r"\b[A-Z]+[A-Z0-9/+=.,-]*\d[A-Z0-9/+=.,-]*\b", value.upper())
+            for candidate in candidates:
+                code = candidate.strip(".,;:")
+                dims = dimensions_from_code(code)
+                if dims.ancho and dims.alto and dims.profundidad:
+                    return code
         combined = f"{item.get('question', '')}\n{item.get('answer', '')}"
         code = extract_possible_code(combined)
-        if code:
+        dims = dimensions_from_code(code) if code else None
+        if code and dims and dims.ancho and dims.alto and dims.profundidad:
             return code
     return ""
 
