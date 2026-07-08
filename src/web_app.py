@@ -17,7 +17,7 @@ from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingErro
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".json"} | IMAGE_FILE_TYPES
+ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf", ".json"} | IMAGE_FILE_TYPES
 DB_PATH = ROOT / "data" / "usage_log.db"
 ASSETS_DIR = ROOT / "assets"
 ADMIN_USERS = {

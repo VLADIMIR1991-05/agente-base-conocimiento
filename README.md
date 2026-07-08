@@ -10,13 +10,20 @@ Coloca tus archivos dentro de:
 knowledge_base/
 ```
 
-Formatos soportados en este boceto:
+La base ya esta organizada por tipo:
 
-- Word: `.docx`
-- Excel: `.xlsx`
-- PowerPoint: `.pptx`
-- Texto: `.txt`, `.md`
-- Enlaces web: pega las URLs en `knowledge_base/urls.txt`, una por linea
+- `knowledge_base/verificar/`: codigos y reglas de VERIFICAR.
+- `knowledge_base/links/`: enlaces livianos a colores, imagenes, videos, presentaciones y documentos.
+- `knowledge_base/imagenes/`: imagenes reales `.png`, `.jpg`, `.jpeg`, `.webp`.
+- `knowledge_base/documentos/word/`: Word `.docx`.
+- `knowledge_base/documentos/excel/`: Excel `.xlsx`.
+- `knowledge_base/documentos/powerpoint/`: PowerPoint `.pptx`.
+- `knowledge_base/documentos/pdf/`: PDF `.pdf`.
+- `knowledge_base/documentos/texto/`: texto `.txt` y Markdown `.md`.
+- `knowledge_base/codigo/`: notas tecnicas, reglas internas o ejemplos de codigo.
+- `knowledge_base/urls.txt`: URLs de paginas web para indexar como texto.
+
+Para instrucciones detalladas, revisa `knowledge_base/README.md`.
 
 ## Configuracion inicial
 
@@ -71,7 +78,7 @@ La interfaz abre el chat del agente, solicita el nombre del usuario antes de emp
 
 ## Probar por consola
 
-Primero crea el indice:
+Para documentos largos, crea el indice:
 
 ```bash
 python src/ingest.py
@@ -133,9 +140,37 @@ Archivos preparados:
 
 Cada recurso debe tener una URL abierta con `http://` o `https://`. Si no hay URL valida, el agente lo ignora para no entregar enlaces rotos. Usa `aliases` para agregar formas comunes de busqueda, codigos y nombres alternativos.
 
+Ejemplo de `knowledge_base/links/colores.json`:
+
+```json
+{
+  "kind": "color",
+  "resources": [
+    {
+      "title": "Bardolino",
+      "aliases": ["bardolino", "0520000947", "tapas bardolino"],
+      "code": "0520000947",
+      "description": "TAPAS ADHESIVAS Ø14mm BARDOLINO / UNI",
+      "url": "https://enlace-publico-del-color"
+    }
+  ]
+}
+```
+
+## Bloques principales del codigo
+
+- `src/rag_core.py`
+  - Bloque 1: carga de archivos locales por tipo.
+  - Bloque 2: base liviana de enlaces.
+  - Bloque 3: continuidad de conversacion.
+  - Bloque 4: busqueda local rapida sin embeddings.
+  - Bloque 5: respuesta con RAG/OpenAI cuando existe indice y API key.
+- `src/verificar_knowledge.py`: interpretacion de codigos y despieces desde VERIFICAR.
+- `src/web_app.py`: interfaz web, historial por usuario, reportes e integracion HTTP.
+
 ## Subir tu base de conocimiento
 
-Sube tus documentos a `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.
+Sube tus documentos a la subcarpeta correspondiente dentro de `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.
 
 ## Compartir online
 

@@ -19,7 +19,9 @@ INDEX_PATH = DATA_DIR / "index.json"
 LINKS_DIR = KNOWLEDGE_DIR / "links"
 
 IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
-SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".js"} | IMAGE_FILE_TYPES
+DOCUMENT_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf"}
+CODE_FILE_TYPES = {".js", ".json"}
+SUPPORTED_FILE_TYPES = DOCUMENT_FILE_TYPES | CODE_FILE_TYPES | IMAGE_FILE_TYPES
 
 
 class UserFacingError(RuntimeError):
@@ -115,6 +117,21 @@ def read_pptx(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def read_pdf(path: Path) -> str:
+    try:
+        from pypdf import PdfReader
+    except ModuleNotFoundError as error:
+        raise UserFacingError("Falta pypdf para leer PDF. Ejecuta: pip install -r requirements.txt") from error
+
+    reader = PdfReader(str(path))
+    pages = []
+    for index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        if text.strip():
+            pages.append(f"Pagina {index}\n{text.strip()}")
+    return "\n\n".join(pages)
+
+
 def read_image(path: Path) -> str:
     label = path.stem.replace("_", " ").replace("-", " ").strip()
     return (
@@ -139,6 +156,8 @@ def read_web_page(url: str) -> str:
 
 
 def load_local_documents() -> list[TextDocument]:
+    # BLOQUE 1: carga de archivos locales por tipo.
+    # Para agregar un formato nuevo, agrega su extension arriba y su lector aqui.
     documents = []
     for path in KNOWLEDGE_DIR.rglob("*"):
         if not path.is_file() or path.name == "urls.txt" or path.name.startswith("~$"):
@@ -154,6 +173,8 @@ def load_local_documents() -> list[TextDocument]:
             text = read_xlsx(path)
         elif path.suffix.lower() == ".pptx":
             text = read_pptx(path)
+        elif path.suffix.lower() == ".pdf":
+            text = read_pdf(path)
         elif path.suffix.lower() in IMAGE_FILE_TYPES:
             text = read_image(path)
         else:
@@ -183,6 +204,8 @@ def load_web_documents() -> list[TextDocument]:
 
 
 def load_resource_links() -> list[dict]:
+    # BLOQUE 2: base liviana de enlaces.
+    # Edita knowledge_base/links/*.json para agregar imagenes, videos, presentaciones o documentos por URL.
     resources = []
     if not LINKS_DIR.exists():
         return resources
@@ -362,14 +385,25 @@ def history_text(history: list[dict] | None, limit: int = 4) -> str:
 
 
 def contextual_question(question: str, history: list[dict] | None = None) -> str:
+    # BLOQUE 3: continuidad de conversacion.
+    # Solo une historial cuando la pregunta actual parece seguimiento del mismo tema.
     current = str(question or "").strip()
     context = history_text(history)
     if not context:
         return current
     normalized = normalize_search_text(current)
-    followup_markers = {"ese", "esa", "eso", "este", "esta", "tambien", "igual", "mismo", "misma", "video", "imagen", "link", "enlace"}
+    followup_markers = {"ese", "esa", "eso", "este", "esta", "estos", "estas", "tambien", "igual", "mismo", "misma", "video", "imagen", "link", "enlace", "documento", "presentacion"}
     current_tokens = set(normalized.split())
-    if len(current_tokens) <= 5 or current_tokens.intersection(followup_markers):
+
+    if not current_tokens.intersection(followup_markers):
+        return current
+
+    previous_tokens = search_tokens(context)
+    meaningful_current = search_tokens(current) - followup_markers
+    if meaningful_current and not meaningful_current.intersection(previous_tokens):
+        return current
+
+    if len(current_tokens) <= 7 or current_tokens.intersection(followup_markers):
         return f"{context}\nPregunta actual: {current}"
     return current
 
@@ -440,6 +474,8 @@ def wants_external_link(question: str) -> bool:
 
 
 def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
+    # BLOQUE 4: busqueda local rapida sin embeddings.
+    # Prioriza enlaces organizados, luego DB de VERIFICAR, luego documentos locales.
     tokens = search_tokens(question)
     if not tokens:
         return []
@@ -547,6 +583,7 @@ def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dic
 
 
 def generate_answer(question: str, matches: list[dict], user_name: str = "", history: list[dict] | None = None) -> str:
+    # BLOQUE 5: respuesta con RAG/OpenAI cuando existe indice y API key.
     load_index()
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
