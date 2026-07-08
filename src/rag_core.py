@@ -4,9 +4,11 @@ import json
 import math
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from verificar_knowledge import DB as VERIFICAR_DB
 from verificar_knowledge import answer_verificar_question
 
 
@@ -16,7 +18,7 @@ DATA_DIR = ROOT / "data"
 INDEX_PATH = DATA_DIR / "index.json"
 
 IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
-SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx"} | IMAGE_FILE_TYPES
+SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".js"} | IMAGE_FILE_TYPES
 
 
 class UserFacingError(RuntimeError):
@@ -143,7 +145,7 @@ def load_local_documents() -> list[TextDocument]:
         if path.suffix.lower() not in SUPPORTED_FILE_TYPES:
             continue
 
-        if path.suffix.lower() in {".txt", ".md"}:
+        if path.suffix.lower() in {".txt", ".md", ".js"}:
             text = read_text_file(path)
         elif path.suffix.lower() == ".docx":
             text = read_docx(path)
@@ -268,6 +270,127 @@ def strip_visible_sources(text: str) -> str:
     return cleaned.strip()
 
 
+def normalize_search_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", str(text or "").lower())
+    normalized = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    return re.sub(r"[^a-z0-9]+", " ", normalized)
+
+
+def search_tokens(text: str) -> set[str]:
+    ignored = {
+        "aqui",
+        "color",
+        "como",
+        "con",
+        "cual",
+        "cuales",
+        "dame",
+        "de",
+        "del",
+        "el",
+        "en",
+        "es",
+        "esta",
+        "este",
+        "la",
+        "las",
+        "lo",
+        "los",
+        "me",
+        "muestra",
+        "muestrame",
+        "para",
+        "que",
+        "quiero",
+        "un",
+        "una",
+        "ver",
+    }
+    return {
+        token
+        for token in normalize_search_text(text).split()
+        if len(token) > 2 and token not in ignored
+    }
+
+
+def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
+    tokens = search_tokens(question)
+    if not tokens:
+        return []
+
+    matches = []
+    for code, description in VERIFICAR_DB.items():
+        searchable = f"{code} {description}"
+        normalized = normalize_search_text(searchable)
+        score = sum(4 if token in normalize_search_text(code) else 1 for token in tokens if token in normalized)
+        if score:
+            matches.append(
+                {
+                    "source": "knowledge_base/verificar/db_codigos.js",
+                    "chunk": 1,
+                    "text": f"Codigo {code}: {description}",
+                    "score": float(score),
+                    "kind": "verificar_db",
+                    "code": code,
+                    "description": description,
+                }
+            )
+
+    if matches:
+        return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+    for document in load_local_documents():
+        for index, chunk in enumerate(chunk_text(document.text, chunk_size=900, overlap=100), start=1):
+            normalized = normalize_search_text(chunk)
+            score = sum(1 for token in tokens if token in normalized)
+            if score:
+                matches.append(
+                    {
+                        "source": document.source,
+                        "chunk": index,
+                        "text": chunk,
+                        "score": float(score),
+                        "kind": "local_document",
+                    }
+                )
+
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
+def generate_local_answer(question: str, matches: list[dict]) -> str:
+    if not matches:
+        return "No encuentro esa informacion en mi base de conocimiento."
+
+    verificar_matches = [match for match in matches if match.get("kind") == "verificar_db"]
+    if verificar_matches:
+        lines = ["Encontré esta información en la base de VERIFICAR:", ""]
+        lines.append("| Codigo | Descripcion |")
+        lines.append("|---|---|")
+        seen_codes = set()
+        for match in verificar_matches[:8]:
+            code = str(match.get("code", ""))
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            description = str(match.get("description", "")).replace("|", "/")
+            lines.append(f"| {code} | {description} |")
+        if "muestr" in normalize_search_text(question) and not any(Path(str(match.get("source", ""))).suffix.lower() in IMAGE_FILE_TYPES for match in matches):
+            lines.append("")
+            lines.append("No tengo una imagen asociada a esa busqueda en la base; solo encontre la referencia textual.")
+        return "\n".join(lines)
+
+    best = matches[0]
+    snippet = " ".join(str(best.get("text", "")).split())
+    if len(snippet) > 700:
+        snippet = snippet[:700].rsplit(" ", 1)[0] + "..."
+    return f"Encontré esto en la base de conocimiento:\n\n{snippet}"
+
+
+def answer_with_local_knowledge(question: str, top_k: int = 8) -> dict:
+    matches = retrieve_local(question, top_k=top_k)
+    return {"answer": generate_local_answer(question, matches), "sources": matches}
+
+
 def generate_answer(question: str, matches: list[dict], user_name: str = "") -> str:
     load_index()
     client = get_client()
@@ -311,8 +434,11 @@ def answer_question(question: str, top_k: int = 5) -> str:
     if verificar_result:
         return verificar_result["answer"]
 
-    matches = retrieve(question, top_k=top_k)
-    return generate_answer(question, matches)
+    try:
+        matches = retrieve(question, top_k=top_k)
+        return generate_answer(question, matches)
+    except UserFacingError:
+        return answer_with_local_knowledge(question, top_k=top_k)["answer"]
 
 
 def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "") -> dict:
@@ -320,5 +446,8 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
     if verificar_result:
         return verificar_result
 
-    matches = retrieve(question, top_k=top_k)
-    return {"answer": generate_answer(question, matches, user_name=user_name), "sources": matches}
+    try:
+        matches = retrieve(question, top_k=top_k)
+        return {"answer": generate_answer(question, matches, user_name=user_name), "sources": matches}
+    except UserFacingError:
+        return answer_with_local_knowledge(question, top_k=top_k)

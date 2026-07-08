@@ -54,8 +54,8 @@ def parse_js_db(path: Path) -> dict[str, str]:
     body = match.group("body")
     entries: dict[str, str] = {}
     for item in re.finditer(r'"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"', body):
-        key = bytes(item.group(1), "utf-8").decode("unicode_escape")
-        value = bytes(item.group(2), "utf-8").decode("unicode_escape")
+        key = json.loads(f'"{item.group(1)}"')
+        value = json.loads(f'"{item.group(2)}"')
         entries[key.upper()] = value
     return entries
 

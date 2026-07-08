@@ -111,6 +111,8 @@ Calcula medidas para el modulo B90G2P6-HZ
 
 La respuesta incluye descripcion, dimensiones detectadas y piezas sugeridas como laterales, base, techo, respaldo, repisas y puertas cuando el codigo tiene suficientes datos. Si luego subes filas reales de piezas desde produccion, las reglas pueden ampliarse para validar cada fila contra las medidas esperadas.
 
+Las busquedas directas en `VERIFICAR`, por ejemplo colores, accesorios o codigos de producto como `bardolino`, se resuelven automaticamente desde `db_codigos.js` aunque todavia no exista el indice RAG ni una `OPENAI_API_KEY`. El boton `Crear indice` queda para documentos generales que quieras responder con embeddings.
+
 ## Subir tu base de conocimiento
 
 Sube tus documentos a `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.
