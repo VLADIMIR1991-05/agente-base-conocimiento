@@ -976,6 +976,23 @@ def recent_interactions(limit: int = 20) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def user_conversation_history(user_name: str, limit: int = 6) -> list[dict]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT created_at, question, answer
+            FROM interactions
+            WHERE user_name = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (user_name, limit),
+        ).fetchall()
+    return list(reversed([dict(row) for row in rows]))
+
+
 def all_interactions() -> list[dict]:
     init_db()
     with sqlite3.connect(DB_PATH) as connection:
@@ -1235,7 +1252,8 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Escribe una pregunta."}, status=400)
             return
         try:
-            result = answer_question_with_sources(question, user_name=user_name)
+            history = user_conversation_history(user_name)
+            result = answer_question_with_sources(question, user_name=user_name, conversation_history=history)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return

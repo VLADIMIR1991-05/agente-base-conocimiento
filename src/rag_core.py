@@ -266,11 +266,25 @@ def strip_visible_sources(text: str) -> str:
     return cleaned.strip()
 
 
-def generate_answer(question: str, matches: list[dict], user_name: str = "") -> str:
+def format_conversation_history(history: list[dict]) -> str:
+    if not history:
+        return "Sin historial previo."
+    turns = []
+    for item in history[-6:]:
+        previous_question = str(item.get("question", "")).strip()
+        previous_answer = str(item.get("answer", "")).strip()
+        if not previous_question and not previous_answer:
+            continue
+        turns.append(f"Pregunta anterior: {previous_question}\nRespuesta anterior: {previous_answer}")
+    return "\n\n".join(turns) if turns else "Sin historial previo."
+
+
+def generate_answer(question: str, matches: list[dict], user_name: str = "", conversation_history: list[dict] | None = None) -> str:
     load_index()
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
     context = build_context(matches)
+    history_text = format_conversation_history(conversation_history or [])
     try:
         response = client.responses.create(
             model=model,
@@ -287,6 +301,8 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
                         "organiza la informacion en una tabla Markdown para que sea facil de leer. "
                         "Usa bullets solo cuando una tabla no aporte claridad. "
                         "Usa unicamente informacion del contexto entregado; no inventes datos. "
+                        "Usa el historial de conversacion solo para entender continuidad, referencias y pronombres como "
+                        "'eso', 'ese', 'el anterior' o 'lo mismo'. No uses el historial para inventar informacion que no este respaldada por el contexto. "
                         "Si la pregunta es ambigua, responde con la informacion mas cercana y sugiere como precisar la consulta. "
                         "Si el contexto no contiene la respuesta, di exactamente: "
                         "'No encuentro esa informacion en mi base de conocimiento.' "
@@ -295,7 +311,12 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
                 },
                 {
                     "role": "user",
-                    "content": f"Usuario: {user_name or 'Usuario interno'}\n\nContexto:\n{context}\n\nPregunta: {question}",
+                    "content": (
+                        f"Usuario: {user_name or 'Usuario interno'}\n\n"
+                        f"Historial reciente de este usuario:\n{history_text}\n\n"
+                        f"Contexto de la base de conocimiento:\n{context}\n\n"
+                        f"Pregunta actual: {question}"
+                    ),
                 },
             ],
         )
@@ -309,6 +330,20 @@ def answer_question(question: str, top_k: int = 5) -> str:
     return generate_answer(question, matches)
 
 
-def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "") -> dict:
-    matches = retrieve(question, top_k=top_k)
-    return {"answer": generate_answer(question, matches, user_name=user_name), "sources": matches}
+def answer_question_with_sources(
+    question: str,
+    top_k: int = 5,
+    user_name: str = "",
+    conversation_history: list[dict] | None = None,
+) -> dict:
+    retrieval_question = question
+    if conversation_history:
+        history_for_search = " ".join(
+            f"{item.get('question', '')} {item.get('answer', '')}" for item in conversation_history[-3:]
+        )
+        retrieval_question = f"{history_for_search}\n{question}"
+    matches = retrieve(retrieval_question, top_k=top_k)
+    return {
+        "answer": generate_answer(question, matches, user_name=user_name, conversation_history=conversation_history),
+        "sources": matches,
+    }
