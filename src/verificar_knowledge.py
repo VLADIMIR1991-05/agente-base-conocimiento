@@ -444,7 +444,27 @@ def build_piece_rows(code: str) -> list[dict[str, str | int]]:
 def extract_possible_code(question: str) -> str:
     text = normalize_code(question)
     candidates = re.findall(r"\b[A-Z][A-Z0-9/+=.,-]{1,40}\b", text)
-    stopwords = {"DESPIECE", "CODIGO", "COD", "MUEBLE", "MODULO", "VALIDAR", "CONSULTAR", "QUIERO", "DAME"}
+    stopwords = {
+        "COD",
+        "CODIGO",
+        "COMO",
+        "CONSULTAR",
+        "DAME",
+        "DE",
+        "DEL",
+        "DESPIECE",
+        "EL",
+        "ES",
+        "LA",
+        "LAS",
+        "LO",
+        "LOS",
+        "MODULO",
+        "MUEBLE",
+        "QUE",
+        "QUIERO",
+        "VALIDAR",
+    }
     for candidate in sorted(candidates, key=len, reverse=True):
         if candidate in stopwords:
             continue
@@ -455,8 +475,13 @@ def extract_possible_code(question: str) -> str:
 
 def looks_like_verificar_question(question: str) -> bool:
     lowered = str(question or "").lower()
-    keywords = ("despiece", "codigo", "código", "modulo", "módulo", "medida", "puerta", "lateral", "repis")
-    return any(keyword in lowered for keyword in keywords) and bool(extract_possible_code(question))
+    code = extract_possible_code(question)
+    if not code:
+        return False
+    if code in DB or re.search(r"\d", code):
+        return True
+    keywords = ("despiez", "codigo", "código", "modulo", "módulo", "medida", "puerta", "lateral", "repis", "significa", "que es", "qué es")
+    return any(keyword in lowered for keyword in keywords)
 
 
 def answer_verificar_question(question: str) -> dict | None:

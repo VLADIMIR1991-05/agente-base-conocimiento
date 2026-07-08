@@ -473,6 +473,36 @@ def wants_external_link(question: str) -> bool:
     )
 
 
+def wants_visual_answer(question: str) -> bool:
+    tokens = set(normalize_search_text(question).split())
+    return bool(tokens.intersection({"acabado", "acabados", "color", "colores", "foto", "fotos", "imagen", "imagenes", "mostrar", "muestra", "muestrame", "ver"}))
+
+
+def retrieve_local_images(question: str, top_k: int = 6) -> list[dict]:
+    tokens = search_tokens(question)
+    if not tokens:
+        return []
+
+    matches = []
+    for document in load_local_documents():
+        source = str(document.source)
+        if Path(source).suffix.lower() not in IMAGE_FILE_TYPES:
+            continue
+        searchable = normalize_search_text(f"{source} {document.text}")
+        score = sum(3 if token in normalize_search_text(Path(source).stem) else 1 for token in tokens if token in searchable)
+        if score:
+            matches.append(
+                {
+                    "source": source,
+                    "chunk": 1,
+                    "text": document.text,
+                    "score": float(score),
+                    "kind": "local_image",
+                }
+            )
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
 def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
     # BLOQUE 4: busqueda local rapida sin embeddings.
     # Prioriza enlaces organizados, luego DB de VERIFICAR, luego documentos locales.
@@ -483,6 +513,11 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
     matches = retrieve_resource_links(question, top_k=top_k)
     if matches:
         return matches
+
+    if wants_visual_answer(question):
+        matches = retrieve_local_images(question, top_k=top_k)
+        if matches:
+            return matches
 
     for code, description in VERIFICAR_DB.items():
         searchable = f"{code} {description}"
@@ -558,6 +593,17 @@ def generate_local_answer(question: str, matches: list[dict]) -> str:
         if "muestr" in normalize_search_text(question) and not any(Path(str(match.get("source", ""))).suffix.lower() in IMAGE_FILE_TYPES for match in matches):
             lines.append("")
             lines.append("No tengo una imagen asociada a esa busqueda en la base; solo encontre la referencia textual.")
+        return "\n".join(lines)
+
+    image_matches = [match for match in matches if match.get("kind") == "local_image"]
+    if image_matches:
+        lines = ["Encontre estas imagenes en la base de acabados:", ""]
+        lines.append("| Acabado | Archivo |")
+        lines.append("|---|---|")
+        for match in image_matches[:6]:
+            source = str(match.get("source", ""))
+            name = Path(source).stem.replace("_", " ").replace("-", " ").strip()
+            lines.append(f"| {name} | {Path(source).name} |")
         return "\n".join(lines)
 
     best = matches[0]
