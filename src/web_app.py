@@ -334,6 +334,34 @@ PAGE = r"""<!doctype html>
       border: 1px solid #cfece0;
     }
 
+    .rating-box {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid #cfece0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .rating-btn {
+      min-height: 32px;
+      min-width: 34px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--teal-dark);
+      font-weight: 800;
+    }
+
+    .rating-btn.selected {
+      background: var(--teal);
+      color: white;
+      border-color: var(--teal);
+    }
+
     .image-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -725,7 +753,49 @@ PAGE = r"""<!doctype html>
       appendParagraph(container, paragraph);
     }
 
-    function addAssistantMessage(text, images = []) {
+    async function rateAnswer(interactionId, rating, box) {
+      if (!interactionId) return;
+      const buttons = box.querySelectorAll(".rating-btn");
+      buttons.forEach((button) => {
+        button.disabled = true;
+        button.classList.toggle("selected", Number(button.dataset.rating) === rating);
+      });
+      const status = box.querySelector(".rating-status");
+      status.textContent = "Guardando...";
+      const response = await fetch("/api/rate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interaction_id: interactionId, rating })
+      });
+      const data = await response.json();
+      status.textContent = data.ok ? "Gracias, calificacion guardada." : (data.message || "No se pudo guardar.");
+      if (adminPanel.classList.contains("active")) await refreshReport();
+    }
+
+    function appendRatingBox(parent, interactionId) {
+      if (!interactionId) return;
+      const box = document.createElement("div");
+      box.className = "rating-box";
+      const label = document.createElement("span");
+      label.textContent = "Califica esta respuesta:";
+      box.appendChild(label);
+      for (let rating = 1; rating <= 5; rating += 1) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "rating-btn";
+        button.dataset.rating = String(rating);
+        button.textContent = String(rating);
+        button.title = `${rating} de 5`;
+        button.addEventListener("click", () => rateAnswer(interactionId, rating, box));
+        box.appendChild(button);
+      }
+      const status = document.createElement("span");
+      status.className = "rating-status";
+      box.appendChild(status);
+      parent.appendChild(box);
+    }
+
+    function addAssistantMessage(text, images = [], interactionId = null) {
       const el = document.createElement("div");
       el.className = "message assistant";
       const textEl = document.createElement("div");
@@ -751,6 +821,7 @@ PAGE = r"""<!doctype html>
         }
         el.appendChild(grid);
       }
+      appendRatingBox(el, interactionId);
       messagesEl.appendChild(el);
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return el;
@@ -802,7 +873,8 @@ PAGE = r"""<!doctype html>
         const date = new Date(item.created_at);
         row.innerHTML = `<strong></strong><span></span>`;
         row.querySelector("strong").textContent = `${item.user_name} - ${date.toLocaleString()}`;
-        row.querySelector("span").textContent = item.question;
+        const rating = item.rating ? `Calificacion: ${item.rating}/5` : "Calificacion pendiente";
+        row.querySelector("span").textContent = `${item.question} - ${rating}`;
         reportListEl.appendChild(row);
       }
     }
@@ -828,7 +900,6 @@ PAGE = r"""<!doctype html>
       userNameEl.value = name;
       localStorage.setItem("kb_user_name", name);
       nameGate.classList.remove("active");
-      addAssistantMessage(`Hola ${name}. Estoy listo para ayudarte con codigos, despieces, colores y enlaces. Ire siguiendo el hilo de lo que conversemos.`);
       questionEl.focus();
     }
 
@@ -926,7 +997,7 @@ PAGE = r"""<!doctype html>
       });
       const data = await response.json();
       waiting.remove();
-      addAssistantMessage(data.answer || data.message, data.images || []);
+      addAssistantMessage(data.answer || data.message, data.images || [], data.interaction_id || null);
       if (adminPanel.classList.contains("active")) await refreshReport();
     });
 
@@ -965,7 +1036,7 @@ def page_response(handler: BaseHTTPRequestHandler) -> None:
 
 
 def init_db() -> None:
-    DB_PATH.parent.mkdir(exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute(
             """
@@ -977,20 +1048,30 @@ def init_db() -> None:
                 question TEXT NOT NULL,
                 answer TEXT NOT NULL,
                 sources TEXT NOT NULL,
-                images TEXT NOT NULL
+                images TEXT NOT NULL,
+                rating INTEGER,
+                rating_note TEXT,
+                rated_at TEXT
             )
             """
         )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(interactions)").fetchall()}
+        if "rating" not in columns:
+            connection.execute("ALTER TABLE interactions ADD COLUMN rating INTEGER")
+        if "rating_note" not in columns:
+            connection.execute("ALTER TABLE interactions ADD COLUMN rating_note TEXT")
+        if "rated_at" not in columns:
+            connection.execute("ALTER TABLE interactions ADD COLUMN rated_at TEXT")
 
 
-def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict]) -> None:
+def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict]) -> int:
     init_db()
     now = datetime.now()
     source_names = [str(source.get("source", "")) for source in sources if source.get("source")]
     created_at = now.isoformat(timespec="seconds")
     date_text = now.date().isoformat()
     with sqlite3.connect(DB_PATH) as connection:
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO interactions (created_at, date, user_name, question, answer, sources, images)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1005,10 +1086,13 @@ def log_interaction(user_name: str, question: str, answer: str, sources: list[di
                 json.dumps(images, ensure_ascii=False),
             ),
         )
-    append_txt_report(created_at, date_text, user_name, question, answer, source_names, images)
+        interaction_id = int(cursor.lastrowid)
+    append_txt_report(interaction_id, created_at, date_text, user_name, question, answer, source_names, images)
+    return interaction_id
 
 
 def append_txt_report(
+    interaction_id: int,
     created_at: str,
     date_text: str,
     user_name: str,
@@ -1017,11 +1101,12 @@ def append_txt_report(
     sources: list[str],
     images: list[dict],
 ) -> None:
-    TXT_REPORT_DIR.mkdir(exist_ok=True)
+    TXT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = TXT_REPORT_DIR / f"informe_{date_text}.txt"
     image_names = [str(image.get("name", "")) for image in images if image.get("name")]
     block = [
         "=" * 90,
+        f"ID: {interaction_id}",
         f"Fecha/hora: {created_at}",
         f"Usuario: {user_name}",
         "",
@@ -1033,6 +1118,52 @@ def append_txt_report(
         "",
         f"Fuentes internas registradas: {', '.join(sources) if sources else 'Sin fuentes registradas'}",
         f"Imagenes: {', '.join(image_names) if image_names else 'Sin imagenes'}",
+        "Calificacion: Pendiente",
+        "",
+    ]
+    with path.open("a", encoding="utf-8") as report:
+        report.write("\n".join(block))
+
+
+def save_rating(interaction_id: int, rating: int, note: str = "") -> bool:
+    init_db()
+    rating = max(1, min(5, int(rating)))
+    rated_at = datetime.now().isoformat(timespec="seconds")
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT id, created_at, date, user_name, question
+            FROM interactions
+            WHERE id = ?
+            """,
+            (interaction_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        connection.execute(
+            """
+            UPDATE interactions
+            SET rating = ?, rating_note = ?, rated_at = ?
+            WHERE id = ?
+            """,
+            (rating, note, rated_at, interaction_id),
+        )
+    append_rating_txt(dict(row), rating, note, rated_at)
+    return True
+
+
+def append_rating_txt(row: dict, rating: int, note: str, rated_at: str) -> None:
+    TXT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TXT_REPORT_DIR / f"informe_{row['date']}.txt"
+    block = [
+        "-" * 90,
+        f"Calificacion registrada para ID: {row['id']}",
+        f"Fecha/hora calificacion: {rated_at}",
+        f"Usuario: {row['user_name']}",
+        f"Pregunta: {row['question']}",
+        f"Calificacion: {rating}/5",
+        f"Comentario: {note or 'Sin comentario'}",
         "",
     ]
     with path.open("a", encoding="utf-8") as report:
@@ -1045,7 +1176,7 @@ def recent_interactions(limit: int = 20) -> list[dict]:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
-            SELECT created_at, date, user_name, question, answer, sources
+            SELECT id, created_at, date, user_name, question, answer, sources, rating, rating_note, rated_at
             FROM interactions
             ORDER BY id DESC
             LIMIT ?
@@ -1055,7 +1186,7 @@ def recent_interactions(limit: int = 20) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def recent_user_history(user_name: str, limit: int = 6) -> list[dict]:
+def recent_user_history(user_name: str, limit: int = 20) -> list[dict]:
     init_db()
     if not user_name:
         return []
@@ -1080,7 +1211,7 @@ def all_interactions() -> list[dict]:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
-            SELECT created_at, date, user_name, question, answer, sources
+            SELECT id, created_at, date, user_name, question, answer, sources, rating, rating_note, rated_at
             FROM interactions
             ORDER BY user_name COLLATE NOCASE, created_at DESC
             """
@@ -1106,17 +1237,21 @@ def create_report_xlsx() -> bytes:
     detail = workbook.create_sheet("Detalle")
     header_fill = PatternFill("solid", fgColor="DFF4EA")
 
-    summary.append(["Usuario", "Fecha", "Consultas"])
+    summary.append(["Usuario", "Fecha", "Consultas", "Promedio calificacion", "Pendientes"])
     counts = Counter((row["user_name"], row["date"]) for row in rows)
     for (user_name, date_text), count in sorted(counts.items(), key=lambda item: (item[0][0].lower(), item[0][1])):
-        summary.append([user_name, date_text, count])
+        group = [row for row in rows if row["user_name"] == user_name and row["date"] == date_text]
+        ratings = [int(row["rating"]) for row in group if row["rating"]]
+        average = round(sum(ratings) / len(ratings), 2) if ratings else "Sin calificar"
+        pending = count - len(ratings)
+        summary.append([user_name, date_text, count, average, pending])
     for cell in summary[1]:
         cell.font = Font(bold=True, color="00665C")
         cell.fill = header_fill
-    for index, width in enumerate([28, 18, 14], start=1):
+    for index, width in enumerate([28, 18, 14, 22, 14], start=1):
         summary.column_dimensions[get_column_letter(index)].width = width
 
-    headers = ["Usuario", "Fecha", "Hora", "Pregunta", "Respuesta", "Fuentes internas"]
+    headers = ["Usuario", "Fecha", "Hora", "Pregunta", "Respuesta", "Calificacion", "Comentario calificacion", "Calificado en", "Fuentes internas"]
     detail.append(headers)
     for cell in detail[1]:
         cell.font = Font(bold=True, color="00665C")
@@ -1130,9 +1265,10 @@ def create_report_xlsx() -> bytes:
             sources = row["sources"] or ""
         created = str(row["created_at"])
         time_text = created.split("T", 1)[1] if "T" in created else created
-        detail.append([row["user_name"], row["date"], time_text, row["question"], row["answer"], sources])
+        rating = f"{row['rating']}/5" if row["rating"] else "Pendiente"
+        detail.append([row["user_name"], row["date"], time_text, row["question"], row["answer"], rating, row["rating_note"] or "", row["rated_at"] or "", sources])
 
-    widths = [24, 16, 14, 48, 86, 52]
+    widths = [24, 16, 14, 48, 86, 16, 36, 22, 52]
     for index, width in enumerate(widths, start=1):
         detail.column_dimensions[get_column_letter(index)].width = width
     detail.freeze_panes = "A2"
@@ -1315,6 +1451,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/ask":
             self.handle_ask()
             return
+        if self.path == "/api/rate":
+            self.handle_rate()
+            return
         json_response(self, {"ok": False, "message": "Ruta no encontrada."}, status=404)
 
     def handle_admin_login(self) -> None:
@@ -1390,8 +1529,25 @@ class AppHandler(BaseHTTPRequestHandler):
         ]
         images = matched_images or image_candidates
         images = images[:4]
-        log_interaction(user_name, question, result["answer"], result["sources"], images)
-        json_response(self, {"ok": True, "answer": result["answer"], "images": images})
+        interaction_id = log_interaction(user_name, question, result["answer"], result["sources"], images)
+        json_response(self, {"ok": True, "answer": result["answer"], "images": images, "interaction_id": interaction_id})
+
+    def handle_rate(self) -> None:
+        payload = read_json_body(self)
+        try:
+            interaction_id = int(payload.get("interaction_id", 0))
+            rating = int(payload.get("rating", 0))
+        except (TypeError, ValueError):
+            json_response(self, {"ok": False, "message": "Calificacion invalida."}, status=400)
+            return
+        note = str(payload.get("note", "")).strip()
+        if interaction_id <= 0 or rating < 1 or rating > 5:
+            json_response(self, {"ok": False, "message": "Calificacion invalida."}, status=400)
+            return
+        if not save_rating(interaction_id, rating, note):
+            json_response(self, {"ok": False, "message": "No encontre la respuesta a calificar."}, status=404)
+            return
+        json_response(self, {"ok": True})
 
     def log_message(self, format: str, *args) -> None:
         return

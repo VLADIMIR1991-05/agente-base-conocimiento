@@ -61,6 +61,72 @@ def parse_js_db(path: Path) -> dict[str, str]:
 
 
 DB = load_verificar_db()
+DEFAULT_DESPIECE_RULES = {
+    "espesores_default": {
+        "bajos": 18,
+        "altos": 15,
+        "closets": 15,
+        "otros": 18,
+        "puertas_frentes": 18,
+        "respaldo": 6,
+        "maletera_closet": 18,
+    },
+    "descuentos": {
+        "ancho_interno_extra": 1,
+        "respaldo_ranura": 10,
+        "repisa_profundidad": 110,
+        "tpm_profundidad": 52,
+        "puerta_ancho_total": 3,
+        "puerta_alto": 3,
+        "puerta_henzo": 35,
+        "puerta_novak": 110,
+    },
+    "ajustes": {
+        "ancho_default": 60,
+        "posterior_hasta_h4": 1,
+        "posterior_desde_h5": 2,
+    },
+    "puertas": {
+        "dos_puertas_desde_ancho": 620,
+    },
+    "familias": {
+        "bajos": ["B", "BS", "MBS", "MB", "EB"],
+        "altos": ["A", "EA", "S", "ES"],
+        "closets": ["CL", "CLOSET", "ECL"],
+    },
+}
+
+
+def load_despiece_rules() -> dict:
+    path = KNOWLEDGE_DIR / "verificar" / "reglas_despiece.json"
+    if not path.exists():
+        return DEFAULT_DESPIECE_RULES
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_DESPIECE_RULES
+    rules = json.loads(json.dumps(DEFAULT_DESPIECE_RULES))
+    for section, values in loaded.items():
+        if isinstance(values, dict) and isinstance(rules.get(section), dict):
+            rules[section].update(values)
+    return rules
+
+
+DESPIECE_RULES = load_despiece_rules()
+
+
+def rule_int(section: str, key: str, default: int) -> int:
+    try:
+        return int(DESPIECE_RULES.get(section, {}).get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def rule_family(name: str) -> set[str]:
+    values = DESPIECE_RULES.get("familias", {}).get(name, [])
+    if not isinstance(values, list):
+        return set(DEFAULT_DESPIECE_RULES["familias"].get(name, []))
+    return {normalize_code(value) for value in values}
 
 
 def split_clean_description(value: str) -> str:
@@ -424,22 +490,22 @@ def module_without_top(code: str) -> bool:
 
 def posterior_adjustment_count(dims: ModuleDimensions) -> int:
     h5_height = extract_height_mm("H5") or 950
-    return 2 if dims.alto >= h5_height else 1
+    return rule_int("ajustes", "posterior_desde_h5", 2) if dims.alto >= h5_height else rule_int("ajustes", "posterior_hasta_h4", 1)
 
 
 def is_high_module(dims: ModuleDimensions) -> bool:
     family = normalize_code(dims.tipo)
-    return family in {"A", "EA", "S", "ES"}
+    return family in rule_family("altos")
 
 
 def is_closet_module(dims: ModuleDimensions) -> bool:
     family = normalize_code(dims.tipo)
-    return family in {"CL", "CLOSET", "ECL"}
+    return family in rule_family("closets")
 
 
 def is_base_module(dims: ModuleDimensions) -> bool:
     family = normalize_code(dims.tipo)
-    return family in {"B", "BS", "MBS", "MB", "EB"}
+    return family in rule_family("bajos")
 
 
 def has_tpm(code: str) -> bool:
@@ -454,10 +520,10 @@ def requested_structure_thickness(text: str) -> int:
 
 def default_structure_thickness(dims: ModuleDimensions) -> int:
     if is_base_module(dims):
-        return 18
+        return rule_int("espesores_default", "bajos", 18)
     if is_high_module(dims) or is_closet_module(dims):
-        return 15
-    return 18
+        return rule_int("espesores_default", "altos", 15) if is_high_module(dims) else rule_int("espesores_default", "closets", 15)
+    return rule_int("espesores_default", "otros", 18)
 
 
 def row(piece: str, qty: int, measure: str, rule: str, thickness: int | str) -> dict[str, str | int]:
@@ -471,12 +537,12 @@ def build_piece_rows(code: str, request_text: str = "") -> list[dict[str, str | 
         return []
 
     structure_thickness = requested_structure_thickness(f"{code} {request_text}") or default_structure_thickness(dims)
-    door_thickness = 18
-    back_thickness = 6
+    door_thickness = rule_int("espesores_default", "puertas_frentes", 18)
+    back_thickness = rule_int("espesores_default", "respaldo", 6)
     internal_width = dims.ancho - (structure_thickness * 2)
-    part_width = internal_width - 1
+    part_width = internal_width - rule_int("descuentos", "ancho_interno_extra", 1)
     depth = dims.profundidad_estructura or dims.profundidad
-    adjustment_width = 60
+    adjustment_width = rule_int("ajustes", "ancho_default", 60)
     is_base = is_base_module(dims)
     uses_tpm = is_base and has_tpm(code)
     has_top = not is_base and not module_without_top(code)
@@ -485,7 +551,7 @@ def build_piece_rows(code: str, request_text: str = "") -> list[dict[str, str | 
         row("Base", 1, f"{part_width} x {depth} mm", "ancho interno menos 1mm x profundidad", structure_thickness),
     ]
     if uses_tpm:
-        tpm_depth = max(depth - 52, 0)
+        tpm_depth = max(depth - rule_int("descuentos", "tpm_profundidad", 52), 0)
         rows.append(row("TPM", 1, f"{part_width} x {tpm_depth} mm", "ancho interno menos 1mm x profundidad menos 52mm solo en esta pieza", structure_thickness))
     elif has_top:
         rows.append(row("Techo", 1, f"{part_width} x {depth} mm", "ancho interno menos 1mm x profundidad", structure_thickness))
@@ -505,7 +571,7 @@ def build_piece_rows(code: str, request_text: str = "") -> list[dict[str, str | 
             row(
                 "Respaldo",
                 1,
-                f"{dims.ancho - (structure_thickness * 2) + 10} x {dims.alto - (structure_thickness * 2) + 10} mm",
+                f"{dims.ancho - (structure_thickness * 2) + rule_int('descuentos', 'respaldo_ranura', 10)} x {dims.alto - (structure_thickness * 2) + rule_int('descuentos', 'respaldo_ranura', 10)} mm",
                 f"descuenta laterales de {structure_thickness}mm y suma ranura; respaldo base {back_thickness}mm",
                 back_thickness,
             ),
@@ -513,22 +579,23 @@ def build_piece_rows(code: str, request_text: str = "") -> list[dict[str, str | 
     )
 
     if is_closet_module(dims):
-        rows.append(row("Maletera", 1, f"{part_width} x {depth} mm", "pieza horizontal de closet; usa ancho interno menos 1mm x profundidad", 18))
+        rows.append(row("Maletera", 1, f"{part_width} x {depth} mm", "pieza horizontal de closet; usa ancho interno menos 1mm x profundidad", rule_int("espesores_default", "maletera_closet", 18)))
 
     shelf_count = extract_shelf_count(code)
     if not shelf_count and is_high_module(dims):
         shelf_count = 1
     if shelf_count:
-        shelf_depth = depth - 110 if depth > 110 else depth
+        shelf_discount = rule_int("descuentos", "repisa_profundidad", 110)
+        shelf_depth = depth - shelf_discount if depth > shelf_discount else depth
         shelf_thickness = 18 if is_closet_module(dims) else structure_thickness
         rows.append(row("Repisa movil", shelf_count, f"{part_width} x {shelf_depth} mm", "ancho interno menos 1mm y profundidad menos 110mm", shelf_thickness))
 
     if "S/P" not in normalize_code(code):
-        door_count = 2 if dims.ancho > 619 else 1
-        door_width = round(dims.ancho / door_count) - 3
-        extra_novak = 110 if has_token(code, "NK") else 0
-        henzo_discount = 35 if has_token(code, "HZ") else 0
-        door_height = dims.alto + extra_novak if extra_novak else dims.alto - henzo_discount - 3
+        door_count = 2 if dims.ancho >= rule_int("puertas", "dos_puertas_desde_ancho", 620) else 1
+        door_width = round(dims.ancho / door_count) - rule_int("descuentos", "puerta_ancho_total", 3)
+        extra_novak = rule_int("descuentos", "puerta_novak", 110) if has_token(code, "NK") else 0
+        henzo_discount = rule_int("descuentos", "puerta_henzo", 35) if has_token(code, "HZ") else 0
+        door_height = dims.alto + extra_novak if extra_novak else dims.alto - henzo_discount - rule_int("descuentos", "puerta_alto", 3)
         rows.append(row("Puerta", door_count, f"{door_height} x {door_width} mm", "descuenta 1.5mm por lado; Henzo descuenta 35mm; Novak suma 110mm", door_thickness))
     return rows
 

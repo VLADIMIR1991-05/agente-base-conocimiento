@@ -401,7 +401,7 @@ def score_text_match(tokens: set[str], searchable: str, title: str = "") -> floa
     return score
 
 
-def history_text(history: list[dict] | None, limit: int = 5) -> str:
+def history_text(history: list[dict] | None, limit: int = 20) -> str:
     if not history:
         return ""
     parts = []
@@ -797,7 +797,7 @@ def generate_contextual_answer(
                         "Eres Asistente MADEVAL, un asistente interno para consulta general de la empresa. "
                         "No copies literalmente la base: interpreta la consulta, asocia palabras mal escritas o incompletas "
                         "con la informacion mas cercana del contexto, cruza los datos disponibles y entrega una respuesta logica, clara y util. "
-                        "Mantén continuidad real con los ultimos 5 mensajes: si el usuario responde corto, acepta, niega, pregunta 'y eso', "
+                        "Mantén continuidad real con las ultimas 20 interacciones: si el usuario responde corto, acepta, niega, pregunta 'y eso', "
                         "'explica', 'despiece', 'medidas', 'ok' o algo parecido, retoma el ultimo tema/codigo mencionado sin volver a pedir contexto. "
                         "Usa solo la informacion contenida en el contexto y en el borrador tecnico entregado; no inventes datos externos. "
                         "Da respuestas más compuestas: inicia con la conclusion, luego organiza detalles, reglas aplicadas y notas utiles. "
@@ -813,7 +813,7 @@ def generate_contextual_answer(
                     "role": "user",
                     "content": (
                         f"Usuario: {user_name or 'Usuario interno'}\n\n"
-                        f"Historial reciente (usa como hilo de los ultimos 5 mensajes):\n{history_text(history) or 'Sin historial reciente.'}\n\n"
+                        f"Historial reciente (usa como hilo de las ultimas 20 interacciones):\n{history_text(history) or 'Sin historial reciente.'}\n\n"
                         f"Pregunta actual:\n{question}\n\n"
                         f"Borrador tecnico recuperado:\n{draft_answer or 'Sin borrador tecnico.'}\n\n"
                         f"Contexto recuperado desde la base de conocimiento:\n{context}"
@@ -883,7 +883,7 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "", his
                         "Tu funcion es ayudar a los colaboradores a encontrar informacion en la base de conocimiento "
                         "sobre codigos, acabados, colores, cronogramas, procesos, enlaces, documentos y material operativo. "
                         "Responde de forma clara, cercana y amable, como un companero experto que ayuda a encontrar rapido la informacion. "
-                        "Sigue el hilo de los ultimos 5 mensajes: si la pregunta actual es corta o depende de algo anterior, retoma el ultimo tema/codigo valido. "
+                        "Sigue el hilo de las ultimas 20 interacciones: si la pregunta actual es corta o depende de algo anterior, retoma el ultimo tema/codigo valido. "
                         "Empieza con una respuesta corta y util; luego agrega detalles, reglas aplicadas y advertencias si ayudan. "
                         "Cuando la respuesta incluya listas de datos, comparaciones, codigos, lotes, fechas, enlaces, colores, responsables o estados, "
                         "organiza la informacion en una tabla Markdown clara, con encabezados cortos y filas faciles de comparar. "
@@ -901,7 +901,7 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "", his
                     "role": "user",
                     "content": (
                         f"Usuario: {user_name or 'Usuario interno'}\n\n"
-                        f"Historial reciente (ultimos 5 mensajes):\n{history_text(history) or 'Sin historial reciente.'}\n\n"
+                        f"Historial reciente (ultimas 20 interacciones):\n{history_text(history) or 'Sin historial reciente.'}\n\n"
                         f"Contexto:\n{context}\n\n"
                         f"Pregunta: {question}"
                     ),

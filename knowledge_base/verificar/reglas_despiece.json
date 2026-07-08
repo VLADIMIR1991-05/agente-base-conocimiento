@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "descripcion": "Reglas editables para calculo de despieces del Asistente MADEVAL.",
+  "espesores_default": {
+    "bajos": 18,
+    "altos": 15,
+    "closets": 15,
+    "otros": 18,
+    "puertas_frentes": 18,
+    "respaldo": 6,
+    "maletera_closet": 18
+  },
+  "descuentos": {
+    "ancho_interno_extra": 1,
+    "respaldo_ranura": 10,
+    "repisa_profundidad": 110,
+    "tpm_profundidad": 52,
+    "puerta_ancho_total": 3,
+    "puerta_alto": 3,
+    "puerta_henzo": 35,
+    "puerta_novak": 110
+  },
+  "ajustes": {
+    "ancho_default": 60,
+    "posterior_hasta_h4": 1,
+    "posterior_desde_h5": 2
+  },
+  "puertas": {
+    "dos_puertas_desde_ancho": 620
+  },
+  "familias": {
+    "bajos": ["B", "BS", "MBS", "MB", "EB"],
+    "altos": ["A", "EA", "S", "ES"],
+    "closets": ["CL", "CLOSET", "ECL"]
+  }
+}
