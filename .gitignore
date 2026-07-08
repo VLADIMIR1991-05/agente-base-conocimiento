@@ -9,5 +9,7 @@ data/usage_log.db-*
 knowledge_base/*
 !knowledge_base/.gitkeep
 !knowledge_base/urls.txt
+!knowledge_base/verificar/
+!knowledge_base/verificar/db_codigos.js
 ~$*
 knowledge_base/~$*

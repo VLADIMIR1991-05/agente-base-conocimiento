@@ -92,6 +92,25 @@ Si el contexto no contiene la respuesta, debe decir:
 No encuentro esa informacion en mi base de conocimiento.
 ```
 
+## Conocimiento de VERIFICAR y despieces por codigo
+
+El agente ahora puede usar el conocimiento del repositorio `VERIFICAR` para interpretar codigos de muebles y generar un despiece tecnico sugerido. Cuando la pregunta contiene palabras como `despiece`, `codigo`, `modulo`, `medida`, `puerta`, `lateral` o `repisa`, el agente intenta resolver primero con reglas deterministicas de `VERIFICAR` y solo usa el RAG documental si no detecta una consulta de codigo.
+
+Fuentes que busca automaticamente:
+
+- `knowledge_base/verificar/db_codigos.js`
+- Un repositorio hermano clonado como `../VERIFICAR/db_codigos.js`
+
+Ejemplos de preguntas:
+
+```text
+Dame el despiece de B60IH4
+Que significa el codigo A40DH5-TI-LBA-BF
+Calcula medidas para el modulo B90G2P6-HZ
+```
+
+La respuesta incluye descripcion, dimensiones detectadas y piezas sugeridas como laterales, base, techo, respaldo, repisas y puertas cuando el codigo tiene suficientes datos. Si luego subes filas reales de piezas desde produccion, las reglas pueden ampliarse para validar cada fila contra las medidas esperadas.
+
 ## Subir tu base de conocimiento
 
 Sube tus documentos a `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.

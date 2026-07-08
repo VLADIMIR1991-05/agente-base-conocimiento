@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from verificar_knowledge import answer_verificar_question
+
 
 ROOT = Path(__file__).resolve().parents[1]
 KNOWLEDGE_DIR = ROOT / "knowledge_base"
@@ -305,10 +307,18 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
 
 
 def answer_question(question: str, top_k: int = 5) -> str:
+    verificar_result = answer_verificar_question(question)
+    if verificar_result:
+        return verificar_result["answer"]
+
     matches = retrieve(question, top_k=top_k)
     return generate_answer(question, matches)
 
 
 def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "") -> dict:
+    verificar_result = answer_verificar_question(question)
+    if verificar_result:
+        return verificar_result
+
     matches = retrieve(question, top_k=top_k)
     return {"answer": generate_answer(question, matches, user_name=user_name), "sources": matches}
