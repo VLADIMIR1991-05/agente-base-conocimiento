@@ -440,8 +440,13 @@ def confirmation_followup_question(question: str, history: list[dict] | None = N
         previous_question = str(item.get("question", "")).strip()
         previous_answer = str(item.get("answer", "")).strip()
         combined = f"{previous_question}\n{previous_answer}"
+        combined_normalized = normalize_search_text(combined)
         code = extract_possible_code(combined)
-        if code and "despiece" in normalize_search_text(combined):
+        offered_piece_breakdown = any(
+            marker in combined_normalized
+            for marker in {"despiece", "desglos", "pieza", "piezas", "modulo", "mueble"}
+        )
+        if code and offered_piece_breakdown:
             return f"Dame el despiece de {code}"
     return current
 
