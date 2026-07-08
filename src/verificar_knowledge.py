@@ -200,6 +200,7 @@ def translate_depth(depth: str) -> str:
 
 
 def translate_module_type(tipo: str) -> str:
+    tipo = canonical_module_type(tipo)
     types = {
         "B": "Modulo Bajo",
         "A": "Modulo Alto",
@@ -221,8 +222,15 @@ def translate_module_type(tipo: str) -> str:
     return types.get(tipo, split_clean_description(DB.get(tipo, "")) or f"Modulo {tipo}")
 
 
+def canonical_module_type(tipo: str) -> str:
+    aliases = {
+        "SB": "BS",  # SB + numero: suspendido bajo. SB solo sigue siendo acabado semibrillante.
+    }
+    return aliases.get(normalize_code(tipo), normalize_code(tipo))
+
+
 def default_height(tipo: str) -> str:
-    family = normalize_code(tipo)
+    family = canonical_module_type(tipo)
     if family in {"BS", "MBS", "S", "ES"}:
         return "H3"
     if family in {"B", "MB", "ST", "EB", "E", "A", "EA"}:
@@ -237,7 +245,7 @@ def default_height(tipo: str) -> str:
 
 
 def default_depth(tipo: str) -> int:
-    family = normalize_code(tipo)
+    family = canonical_module_type(tipo)
     if family in {"A", "EA"}:
         return 320
     if family in {"BS", "MBS", "S", "ES", "MB"}:
@@ -252,7 +260,7 @@ def default_depth(tipo: str) -> int:
 
 
 def type_uses_number_as_depth(tipo: str) -> bool:
-    return bool(re.match(r"^(LX|LXTR|LX2L|LB|LBTR|LVB|FX|FXTR|FB|FBTR)", normalize_code(tipo)))
+    return bool(re.match(r"^(LX|LXTR|LX2L|LB|LBTR|LVB|FX|FXTR|FB|FBTR)", canonical_module_type(tipo)))
 
 
 def extract_height_mm(text: str) -> int:
@@ -279,7 +287,7 @@ def extract_depth_mm(text: str) -> int:
 def structural_depth_from_code(text: str, total_depth: int, tipo: str = "") -> int:
     match = re.search(r"(?<![A-Z/])P(\d+(?:[.,]\d+)?)", normalize_code(text))
     number = float(match.group(1).replace(",", ".")) if match else 0
-    family = normalize_code(tipo)
+    family = canonical_module_type(tipo)
     if not total_depth:
         return 0
     if "S/P" in normalize_code(text) or family == "ST":
@@ -359,6 +367,7 @@ def interpret_code(code: str) -> list[str]:
         if not match:
             return [translate_token(part) for part in combine_special_tokens([part for part in re.split(r"[-+]", code) if part])]
         tipo, width, detail = match.groups()
+        tipo = canonical_module_type(tipo)
         description = [translate_module_type(tipo), f"Ancho {convert_code_number_to_mm(width)}mm"]
         details = interpret_compact_detail(detail)
         description.extend(details)
@@ -385,6 +394,7 @@ def dimensions_from_code(code: str) -> ModuleDimensions:
         dims.profundidad_estructura = structural_depth_from_code(code, dims.profundidad, dims.tipo) if dims.profundidad else 0
     elif match:
         tipo, width, detail = match.groups()
+        tipo = canonical_module_type(tipo)
         dims.tipo = tipo
         dims.ancho = 0 if type_uses_number_as_depth(tipo) else convert_code_number_to_mm(width)
         dims.alto = extract_height_mm(code) or extract_height_mm(detail) or extract_height_mm(default_height(tipo))
