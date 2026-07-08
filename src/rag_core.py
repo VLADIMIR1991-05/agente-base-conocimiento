@@ -451,11 +451,64 @@ def confirmation_followup_question(question: str, history: list[dict] | None = N
     return current
 
 
+def latest_code_from_history(history: list[dict] | None) -> str:
+    if not history:
+        return ""
+    for item in reversed(history):
+        combined = f"{item.get('question', '')}\n{item.get('answer', '')}"
+        code = extract_possible_code(combined)
+        if code:
+            return code
+    return ""
+
+
+def followup_thickness(question: str) -> int:
+    normalized = normalize_search_text(question)
+    match = re.search(r"\b(15|18)\s*(?:mm|milimetros?)?\b", normalized)
+    return int(match.group(1)) if match else 0
+
+
+def piece_breakdown_followup_question(question: str, history: list[dict] | None = None) -> str:
+    current = str(question or "").strip()
+    if extract_possible_code(current):
+        return current
+
+    normalized = normalize_search_text(current)
+    thickness = followup_thickness(current)
+    markers = {
+        "despiece",
+        "despieza",
+        "despiezar",
+        "pieza",
+        "piezas",
+        "mueble",
+        "modulo",
+        "mismo",
+        "misma",
+        "grosor",
+        "espesor",
+        "material",
+    }
+    if not thickness and not set(normalized.split()).intersection(markers):
+        return current
+
+    code = latest_code_from_history(history)
+    if not code:
+        return current
+
+    if thickness:
+        return f"Dame el despiece de {code} en {thickness} mm"
+    return f"Dame el despiece de {code}"
+
+
 def contextual_question(question: str, history: list[dict] | None = None) -> str:
     # BLOQUE 3: continuidad de conversacion.
     # Solo une historial cuando la pregunta actual parece seguimiento del mismo tema.
     original = str(question or "").strip()
     current = confirmation_followup_question(original, history)
+    if current != original:
+        return current
+    current = piece_breakdown_followup_question(original, history)
     if current != original:
         return current
     context = history_text(history)
@@ -769,6 +822,8 @@ def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dic
     search_question = contextual_question(question, history)
     verificar_result = answer_verificar_question(search_question)
     if verificar_result:
+        if verificar_result.get("is_piece_breakdown"):
+            return verificar_result
         try:
             verificar_result["answer"] = generate_contextual_answer(
                 search_question,
@@ -856,6 +911,8 @@ def answer_question(question: str, top_k: int = 5) -> str:
 
     verificar_result = answer_verificar_question(question)
     if verificar_result:
+        if verificar_result.get("is_piece_breakdown"):
+            return verificar_result["answer"]
         try:
             return generate_contextual_answer(
                 question,
@@ -879,6 +936,8 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
     contextual = contextual_question(question, history)
     verificar_result = answer_verificar_question(contextual)
     if verificar_result:
+        if verificar_result.get("is_piece_breakdown"):
+            return verificar_result
         try:
             verificar_result["answer"] = generate_contextual_answer(
                 contextual,

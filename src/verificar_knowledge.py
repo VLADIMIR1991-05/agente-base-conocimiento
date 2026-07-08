@@ -576,6 +576,25 @@ def looks_like_verificar_question(question: str) -> bool:
     return any(keyword in lowered for keyword in keywords)
 
 
+def wants_piece_breakdown(question: str) -> bool:
+    lowered = str(question or "").lower()
+    keywords = (
+        "despiez",
+        "desglos",
+        "pieza",
+        "piezas",
+        "mueble",
+        "modulo",
+        "módulo",
+        "grosor",
+        "espesor",
+        "material",
+        "15",
+        "18",
+    )
+    return any(keyword in lowered for keyword in keywords)
+
+
 def answer_verificar_question(question: str) -> dict | None:
     if not looks_like_verificar_question(question):
         return None
@@ -587,9 +606,11 @@ def answer_verificar_question(question: str) -> dict | None:
     description = interpret_code(code)
     dims = dimensions_from_code(code)
     rows = build_piece_rows(code, question)
+    include_piece_rows = bool(rows and wants_piece_breakdown(question))
     source = next((str(path) for path in verificar_candidate_paths() if path.exists()), "VERIFICAR/db_codigos.js")
 
-    lines = [f"Despiece interpretado para `{code}`.", ""]
+    title = f"Despiece interpretado para `{code}`." if include_piece_rows else f"Entiendo que te refieres a `{code}`."
+    lines = [title, ""]
     lines.append("| Campo | Valor |")
     lines.append("|---|---|")
     lines.append(f"| Descripcion | {' + '.join(description)} |")
@@ -599,17 +620,20 @@ def answer_verificar_question(question: str) -> dict | None:
     lines.append(f"| Profundidad | {dims.profundidad or 'No detectada'} mm |")
     lines.append("")
 
-    if rows:
+    if include_piece_rows:
         lines.append("| Pieza sugerida | Cantidad | Medida esperada | Grosor | Regla aplicada |")
         lines.append("|---|---:|---|---|---|")
         for row in rows:
             lines.append(f"| {row['pieza']} | {row['cantidad']} | {row['medida']} | {row.get('grosor', '-')} | {row['regla']} |")
         lines.append("")
-        lines.append("Este despiece es una propuesta tecnica calculada desde las reglas de `VERIFICAR`; si subes filas reales de piezas, se pueden validar contra estas medidas.")
+        lines.append("Este despiece es una propuesta tecnica calculada con las reglas cargadas; si subes filas reales de piezas, se pueden validar contra estas medidas.")
+    elif rows:
+        lines.append("Si quieres, tambien puedo darte el despiece calculado de este modulo en 15 mm o 18 mm.")
     else:
         lines.append("Pude traducir el codigo, pero no detecte dimensiones suficientes para calcular piezas.")
 
     return {
         "answer": "\n".join(lines),
         "sources": [{"source": source, "chunk": 1, "text": json.dumps({"code": code, "description": description}, ensure_ascii=False), "score": 1.0}],
+        "is_piece_breakdown": include_piece_rows,
     }
