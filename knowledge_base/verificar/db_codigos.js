@@ -1,6 +1,193 @@
 ﻿// Base de datos de nomenclaturas del validador.
 // Para actualizar codigos, reemplaza solo este archivo y no toques el HTML.
 const DB = {
+
+    [
+    {
+      id: 1,
+      nombre: "Melamínico",
+      composicion: "El tablero base está fabricado en aglomerado termofundido. Está recubierto con una lámina decorativa impregnada con resina melamínica, lo que garantiza que no se desprenda y sea resistente.",
+      caracteristicasTecnicas: {
+        formato: "color/color",
+        espesor: "18 mm",
+        canto: "Canto duro de 22x1 mm para estructuras y frentes"
+      },
+      ventajas: [
+        "Brinda cortes limpios y una menor absorción de humedad al estar libre de impurezas.",
+        "Alta resistencia al rayado, a la abrasión, a las manchas, a la humedad, al calor y a disolventes.",
+        "Propiedades antibacteriales al 99% en texturas mate y fantasía."
+      ],
+      nomenclatura: {
+        CO: "Corrugado",
+        MT: "Mate",
+        PO: "Poro",
+        TE: "Textil",
+        WO: "Wood",
+        NV: "Nativo",
+        SY: "Synchro",
+        CU: "Cuero",
+        ME: "Metal",
+        PI: "Piedra"
+      },
+      listadoColores: {
+        cocinasYCatatogoGeneral: {
+          categoria1: ["Blanco CO", "Blanco Roble", "Capri CO", "Taupe CO", "Plomo CO", "Gris CO", "Capri Cuero", "Panela SY", "Cartagena SY", "Positano SY", "Avellana PO", "Burdeos CO", "Galápagos CU", "Inox ME", "Ambar ME", "Mamba CU"],
+          categoria2: ["Lino CO", "Toquilla CU", "Niebla PO", "Ceniza MT", "Tivoli CU", "Negro Roble", "Nacar SY", "Bellota SY", "Bardolino SY", "Milán SY", "Fume SY"],
+          categoria3: ["Seike NV", "Cuarzo PI", "Trama TX", "Verde Silvestre CO", "Petra PI", "Gris Industrial PI", "Roble Natural NV", "Roble Chic NV", "Catania NV"]
+        },
+        vestidoresConfortYClosets: {
+          categoriaMinus1: ["Blanco CO"],
+          categoria0: ["Blanco Roble"],
+          categoria1: ["Capri CO", "Capri CU", "Gris CO", "Plomo CO", "Taupe CO", "Ambar ME", "Avellana PO", "Burdeos CO", "Cartagena SY", "Galápagos CU", "Inox ME", "Mamba CU", "Positano SY", "Panela SY"],
+          categoria2: ["Bardolino SY", "Ballota SY", "Ceniza MT", "Fume SY", "Lino CO", "Milán SY", "Nacar SY", "Negro Roble", "Tivoli CU", "Toquilla CU", "Niebla PO", "Verde Silvestre CO"],
+          categoria3: ["Catania NV", "Cuarzo PI", "Gris Industrial PI", "Petra PI", "Roble Chic NV", "Roble Natural NV", "Seike NV", "Trama TX"],
+          notaPremium: "Para la línea de Clósets Premium (solo estructuras), el Blanco CO, Blanco Roble, Capri CO, Capri CU, Plomo CO y Gris CO entran en Categoría 0."
+        }
+      }
+    },
+    {
+      id: 2,
+      nombre: "Laca (sobre MDF)",
+      composicion: "Utiliza como núcleo un tablero de MDF obtenido de troncos de pino radiata. A este tablero se le aplica una laca poliuretana de dos componentes de alta resistencia.",
+      caracteristicasTecnicas: {
+        espesor: "18 mm",
+        caras: "Primera cara lacada y la posterior en color de melamina"
+      },
+      consideracionesUso: [
+        "Material exclusivo para uso en interiores.",
+        "No debe exponerse al contacto directo con el agua ni a una humedad excesiva.",
+        "No debe exponerse a fuentes de calor que excedan los 50°C."
+      ],
+      ventajas: [
+        "Superficie sin imperfecciones, ideal para hacer molduras y lograr excelentes acabados."
+      ],
+      listadoColores porAcabado: {
+        mate: ["Blanco", "Sabbia", "Arena", "Bruma", "Fume", "Pino", "Verde Selva", "Grafito", "Boreal", "Azul Azabache", "Ocaso", "Terra", "Andesita", "Nube", "Otoño", "Urban", "Cacao Gold"],
+        semibrillante: ["Habano", "Marrón", "Luna"],
+        brillante: ["Blanco", "Chimborazo", "Alba", "Marrón", "Sabbia", "Ocaso", "Cacao Gold", "Luna"],
+        metalizadoMate: ["Cacao White", "Palo de Rosa", "Galápagos", "Fog", "Noche"],
+        metalizadoBrillante: ["Gris"]
+      }
+    },
+    {
+      id: 3,
+      nombre: "Enchape (sobre MDF o Aglomerado)",
+      composicion: "El tablero base es MDF crudo recubierto con chapa de madera natural o reconstituida.",
+      caracteristicasTecnicas: {
+        espesor: "19 mm",
+        formato: "color/color",
+        cantos: "Recubiertos con la misma chapa y acabado final en laca de poliuretano acrílico"
+      },
+      listadoColores: {
+        naturales: ["Roble Americano Canela", "Seike Caramelo", "Roble Americano Miel", "Roble Obsidiana", "Roble Humo"],
+        reconstituidos: ["Roble Claro Natural", "Nogal Mallado Natural", "Roble Rústico", "Roble Rameado Rústico"]
+      }
+    },
+    {
+      id: 4,
+      nombre: "Altobrillo 1C",
+      composicion: "Tablero de MDF revestido con un laminado acrílico brillante en el frente y melamina soft en la contracara.",
+      caracteristicasTecnicas: {
+        espesor: "18 mm",
+        acabadoSuperficie: "Brillante de 100 Gloss",
+        restricciones: "No es posible hacer repisas engrosadas"
+      },
+      ventajas: [
+        "Resistente a los rayos ultravioletas, conserva inalterado su color.",
+        "Excelente resistencia al calor, al agua y a las manchas.",
+        "Resistencia al impacto de diez a veinte veces más que la del vidrio."
+      ],
+      listadoColores: ["Blanco 1C", "Beige 1C", "Negro 1C"]
+    },
+    {
+      id: 5,
+      nombre: "Soft Touch",
+      composicion: "Tablero de MDF recubierto con una lámina de poliéster (PET) con acabado especial usando un pegamento de poliuretano.",
+      caracteristicasTecnicas: {
+        espesor: "18 mm",
+        disponibilidad: "1 o 2 caras decorativas",
+        restricciones: "No admite repisas engrosadas"
+      },
+      ventajas: [
+        "Suave al tacto, da la sensación de ser una superficie lacada.",
+        "Propiedades anti-huella.",
+        "Resistente al rayado."
+      ],
+      listadoColores: ["SFT Blanco 1C", "SFT Gris 1C", "SFT Verde 1C"]
+    },
+    {
+      id: 6,
+      nombre: "Tmatt",
+      composicion: "Tablero de MDF con 1 cara lacada supermate.",
+      caracteristicasTecnicas: {
+        espesor: "18 mm",
+        caraPosterior: "Melamina del mismo color que el frente",
+        restricciones: "No se pueden realizar repisas engrosadas debido al ancho del canto"
+      },
+      ventajas: [
+        "Superficie suave al tacto.",
+        "Resistente al rayado y a la abrasión.",
+        "Propiedades anti-huella y auto-regenerativas."
+      ],
+      listadoColores: ["Tmatt Negro"]
+    },
+    {
+      id: 7,
+      nombre: "Materiales Especiales",
+      subtipos: [
+        {
+          nombre: "Syros",
+          composicion: "Tablero de MDF con una lámina coextruida sobre un poliéster base, formulada para reproducir el efecto de metales cepillados.",
+          caracteristicasTecnicas: {
+            espesor: "18 mm",
+            restricciones: "No permite repisas engrosadas"
+          },
+          ventajas: ["Suave al tacto", "Resistente a rayos UV", "Resistente a la luz", "Resistente a rayones", "Resistente a cambios de temperatura"],
+          colores: ["Syros Gold", "Syros Rose"]
+        },
+        {
+          nombre: "Mirror Bronzo",
+          caracteristicasTecnicas: {
+            detalles: "Tablero de 1 cara que utiliza canto negro"
+          },
+          colores: ["Mirror Bronzo"]
+        },
+        {
+          nombre: "Ranurados",
+          caracteristicasTecnicas: {
+            detalles: "Tableros con una cara ranurada y otra plana, manteniendo el mismo color tanto en sus caras como en el canto"
+          },
+          colores: ["Blanco Oro Ranurado", "Negro Ranurado"]
+        },
+        {
+          nombre: "Formex Metal Líquido",
+          caracteristicasTecnicas: {
+            detalles: "Tableros que mantienen las dos caras y el canto del mismo color"
+          },
+          colores: ["Ottone", "Grigo Minerale", "Grigo Alfa"]
+        }
+      ]
+    },
+    {
+      id: 8,
+      nombre: "Puertas (Aluminio y Madera con Vidrio)",
+      tipos: [
+        {
+          nombre: "Marcos de Aluminio",
+          estructura: "Puertas estructuradas con perfiles de aluminio y vidrios de 4 mm de espesor.",
+          coloresPerfil: ["Aluminio", "Negro", "Grafito", "Cacao Gold", "Luna"],
+          coloresVidrios: ["Arenado", "Transparente", "Bronce", "Bronce Reflectivo", "Ónix", "Acanalado"],
+          vidriosPintados: ["Negro", "Marrón", "Humo", "Carbón"]
+        },
+        {
+          nombre: "Marcos de Madera con Vidrio",
+          estructura: "Puertas de melamínico o MDF (laca, termolaminado o enchape) con vidrio embutido.",
+          coloresVidrios: ["Arenado", "Transparente", "Bronce", "Bronce Reflectivo", "Plata Reflectivo", "Ónix"]
+        }
+      ]
+    }
+  ]
+    
     "A": "Modulo Alto",
     "B": "Modulo Bajo",
     "C": "CUBERTERO",
@@ -2281,27 +2468,48 @@ const DB = {
 
     "TIPOS DE MODULOS": "Bajos, altos, suspendidos, auxiliares, altos sobre meson / Bajos, suspendidos, auxiliares. En esta coleccion no existe ningun tipo de modulos altos. / Bajos, suspendidos, auxiliares, altos (Altos unicamente para colocar encima de modulos auxiliares). / Bajos sin puerta (con y sin respaldo). Altos sin puerta (con y sin respaldo), Altos con puerta de malla metalica, Auxiliares sin puerta (con y sin respaldo). Bases loft (Patas metalicas altura 316mm que funcionan con modulos H3). Modulos altos sobre isla (Modulos metalicos suspendidos que se sujetan al tumbado). Accesorios sobre meson",
 
-    "TIPOS DE PERFILES": "Perfil Tipo F: Un punto de fijacion al piso y 2 puntos en pared.",
-
-    // Claves agregadas desde ACABADOS.docx.
-    "FORMEX METAL LIQUIDO": "Tableros que mantienen las dos caras y el canto del mismo color",
-    "MARCOS DE ALUMINIO": "Puertas estructuradas con perfiles de aluminio y vidrios de 4 mm de espesor",
-    "MARCOS DE MADERA CON VIDRIO": "Puertas de melaminico o MDF (laca, termolaminado o enchape) con vidrio embutido",
-    "ME": "Metal",
-    "MET BR": "Metalizado Brillante",
-    "MIRROR BRONZO": "Tablero de 1 cara que utiliza canto negro",
-    "MM": "Metalizado Mate",
-    "MT": "Mate",
-    "NATURALES": "Roble Americano Canela, Seike Caramelo, Roble Americano Miel, Roble Obsidiana, Roble Humo",
-    "NV": "Nativo",
-    "PI": "Piedra",
-    "PO": "Poro",
-    "RANURADOS": "Tableros con una cara ranurada y otra plana, manteniendo el mismo color tanto en sus caras como en el canto",
-    "RECONSTITUIDOS": "Roble Claro Natural, Nogal Mallado Natural, Roble Rustico, Roble Rameado Rustico",
-    "SB": "Semibrillante",
-    "SY": "Synchro",
-    "SYROS": "Tablero de MDF con una lamina coextruida sobre un poliester base, formulada para reproducir el efecto de metales cepillados. Es suave al tacto y resistente a rayos UV, a la luz, a rayones y a cambios de temperatura. No permite repisas engrosadas y viene en espesor de 18 mm",
-    "TE": "Textil",
+    "TIPOS DE PERFILES": "Perfil Tipo F: Un punto de fijacion al piso y 2 puntos en pared.",
+
+
+
+    // Claves agregadas desde ACABADOS.docx.
+
+    "FORMEX METAL LIQUIDO": "Tableros que mantienen las dos caras y el canto del mismo color",
+
+    "MARCOS DE ALUMINIO": "Puertas estructuradas con perfiles de aluminio y vidrios de 4 mm de espesor",
+
+    "MARCOS DE MADERA CON VIDRIO": "Puertas de melaminico o MDF (laca, termolaminado o enchape) con vidrio embutido",
+
+    "ME": "Metal",
+
+    "MET BR": "Metalizado Brillante",
+
+    "MIRROR BRONZO": "Tablero de 1 cara que utiliza canto negro",
+
+    "MM": "Metalizado Mate",
+
+    "MT": "Mate",
+
+    "NATURALES": "Roble Americano Canela, Seike Caramelo, Roble Americano Miel, Roble Obsidiana, Roble Humo",
+
+    "NV": "Nativo",
+
+    "PI": "Piedra",
+
+    "PO": "Poro",
+
+    "RANURADOS": "Tableros con una cara ranurada y otra plana, manteniendo el mismo color tanto en sus caras como en el canto",
+
+    "RECONSTITUIDOS": "Roble Claro Natural, Nogal Mallado Natural, Roble Rustico, Roble Rameado Rustico",
+
+    "SB": "Semibrillante",
+
+    "SY": "Synchro",
+
+    "SYROS": "Tablero de MDF con una lamina coextruida sobre un poliester base, formulada para reproducir el efecto de metales cepillados. Es suave al tacto y resistente a rayos UV, a la luz, a rayones y a cambios de temperatura. No permite repisas engrosadas y viene en espesor de 18 mm",
+
+    "TE": "Textil",
+
     "WO": "Wood",
 };
 
