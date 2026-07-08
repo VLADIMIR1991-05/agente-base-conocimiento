@@ -113,6 +113,26 @@ La respuesta incluye descripcion, dimensiones detectadas y piezas sugeridas como
 
 Las busquedas directas en `VERIFICAR`, por ejemplo colores, accesorios o codigos de producto como `bardolino`, se resuelven automaticamente desde `db_codigos.js` aunque todavia no exista el indice RAG ni una `OPENAI_API_KEY`. El boton `Crear indice` queda para documentos generales que quieras responder con embeddings.
 
+El chat usa el historial reciente del usuario para continuar el hilo. Si alguien pregunta primero por `bardolino` y luego dice `y el video?`, el agente entiende que sigue hablando de Bardolino y busca enlaces de video relacionados.
+
+## Base liviana de enlaces
+
+Para ahorrar tokens y responder mas rapido, agrega recursos externos como enlaces organizados en:
+
+```text
+knowledge_base/links/
+```
+
+Archivos preparados:
+
+- `colores.json`: enlaces de imagenes o fichas de colores.
+- `imagenes.json`: enlaces directos a imagenes generales.
+- `videos.json`: videos de capacitacion, procesos o productos.
+- `presentaciones.json`: PowerPoint, Google Slides o PDFs de presentacion.
+- `documentos.json`: fichas, manuales, hojas tecnicas o documentos compartidos.
+
+Cada recurso debe tener una URL abierta con `http://` o `https://`. Si no hay URL valida, el agente lo ignora para no entregar enlaces rotos. Usa `aliases` para agregar formas comunes de busqueda, codigos y nombres alternativos.
+
 ## Subir tu base de conocimiento
 
 Sube tus documentos a `knowledge_base/`. No subas `.env`; esta ignorado en `.gitignore`.

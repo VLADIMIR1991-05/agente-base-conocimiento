@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 KNOWLEDGE_DIR = ROOT / "knowledge_base"
 DATA_DIR = ROOT / "data"
 INDEX_PATH = DATA_DIR / "index.json"
+LINKS_DIR = KNOWLEDGE_DIR / "links"
 
 IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 SUPPORTED_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".js"} | IMAGE_FILE_TYPES
@@ -181,6 +182,39 @@ def load_web_documents() -> list[TextDocument]:
     return documents
 
 
+def load_resource_links() -> list[dict]:
+    resources = []
+    if not LINKS_DIR.exists():
+        return resources
+
+    for path in sorted(LINKS_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        items = payload.get("resources", payload if isinstance(payload, list) else [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url", "")).strip()
+            if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+                continue
+            resources.append(
+                {
+                    "source": str(path.relative_to(ROOT)),
+                    "kind": str(item.get("kind") or payload.get("kind") or path.stem).strip(),
+                    "title": str(item.get("title", "")).strip(),
+                    "description": str(item.get("description", "")).strip(),
+                    "url": url,
+                    "aliases": item.get("aliases", []),
+                    "code": str(item.get("code", "")).strip(),
+                }
+            )
+    return resources
+
+
 def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 180) -> list[str]:
     normalized = " ".join(text.split())
     if not normalized:
@@ -313,12 +347,107 @@ def search_tokens(text: str) -> set[str]:
     }
 
 
-def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
+def history_text(history: list[dict] | None, limit: int = 4) -> str:
+    if not history:
+        return ""
+    parts = []
+    for item in history[-limit:]:
+        question = str(item.get("question", "")).strip()
+        answer = str(item.get("answer", "")).strip()
+        if question:
+            parts.append(f"Pregunta anterior: {question}")
+        if answer:
+            parts.append(f"Respuesta anterior: {answer[:500]}")
+    return "\n".join(parts)
+
+
+def contextual_question(question: str, history: list[dict] | None = None) -> str:
+    current = str(question or "").strip()
+    context = history_text(history)
+    if not context:
+        return current
+    normalized = normalize_search_text(current)
+    followup_markers = {"ese", "esa", "eso", "este", "esta", "tambien", "igual", "mismo", "misma", "video", "imagen", "link", "enlace"}
+    current_tokens = set(normalized.split())
+    if len(current_tokens) <= 5 or current_tokens.intersection(followup_markers):
+        return f"{context}\nPregunta actual: {current}"
+    return current
+
+
+def retrieve_resource_links(question: str, top_k: int = 6) -> list[dict]:
     tokens = search_tokens(question)
     if not tokens:
         return []
 
     matches = []
+    for resource in load_resource_links():
+        aliases = resource.get("aliases", [])
+        alias_text = " ".join(str(alias) for alias in aliases) if isinstance(aliases, list) else str(aliases)
+        searchable = " ".join(
+            [
+                str(resource.get("kind", "")),
+                str(resource.get("title", "")),
+                str(resource.get("description", "")),
+                str(resource.get("code", "")),
+                alias_text,
+                str(resource.get("url", "")),
+            ]
+        )
+        normalized = normalize_search_text(searchable)
+        score = sum(3 if token in normalize_search_text(str(resource.get("title", ""))) else 1 for token in tokens if token in normalized)
+        if score:
+            matches.append(
+                {
+                    "source": resource["source"],
+                    "chunk": 1,
+                    "text": f"{resource['title']} - {resource['url']}",
+                    "score": float(score),
+                    "kind": "resource_link",
+                    "resource_kind": resource.get("kind", ""),
+                    "title": resource.get("title", ""),
+                    "description": resource.get("description", ""),
+                    "url": resource.get("url", ""),
+                    "code": resource.get("code", ""),
+                }
+            )
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
+def wants_external_link(question: str) -> bool:
+    tokens = set(normalize_search_text(question).split())
+    return bool(
+        tokens.intersection(
+            {
+                "enlace",
+                "enlaces",
+                "link",
+                "links",
+                "url",
+                "video",
+                "videos",
+                "imagen",
+                "imagenes",
+                "foto",
+                "fotos",
+                "presentacion",
+                "presentaciones",
+                "powerpoint",
+                "ppt",
+                "pptx",
+            }
+        )
+    )
+
+
+def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
+    tokens = search_tokens(question)
+    if not tokens:
+        return []
+
+    matches = retrieve_resource_links(question, top_k=top_k)
+    if matches:
+        return matches
+
     for code, description in VERIFICAR_DB.items():
         searchable = f"{code} {description}"
         normalized = normalize_search_text(searchable)
@@ -361,6 +490,22 @@ def generate_local_answer(question: str, matches: list[dict]) -> str:
     if not matches:
         return "No encuentro esa informacion en mi base de conocimiento."
 
+    link_matches = [match for match in matches if match.get("kind") == "resource_link"]
+    if link_matches:
+        lines = ["Encontré estos enlaces listos para abrir:", ""]
+        lines.append("| Tipo | Recurso | Enlace |")
+        lines.append("|---|---|---|")
+        seen_urls = set()
+        for match in link_matches[:6]:
+            url = str(match.get("url", ""))
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            kind = str(match.get("resource_kind", "")).replace("|", "/") or "link"
+            title = str(match.get("title", "")).replace("|", "/") or url
+            lines.append(f"| {kind} | {title} | {url} |")
+        return "\n".join(lines)
+
     verificar_matches = [match for match in matches if match.get("kind") == "verificar_db"]
     if verificar_matches:
         lines = ["Encontré esta información en la base de VERIFICAR:", ""]
@@ -386,12 +531,22 @@ def generate_local_answer(question: str, matches: list[dict]) -> str:
     return f"Encontré esto en la base de conocimiento:\n\n{snippet}"
 
 
-def answer_with_local_knowledge(question: str, top_k: int = 8) -> dict:
-    matches = retrieve_local(question, top_k=top_k)
+def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dict] | None = None) -> dict:
+    search_question = contextual_question(question, history)
+    if wants_external_link(question):
+        link_matches = retrieve_resource_links(search_question, top_k=top_k)
+        if link_matches:
+            return {"answer": generate_local_answer(question, link_matches), "sources": link_matches}
+        return {
+            "answer": "No tengo un enlace abierto para esa consulta todavia. Puedes agregarlo en `knowledge_base/links/` y lo entregare directamente la proxima vez.",
+            "sources": [],
+        }
+
+    matches = retrieve_local(search_question, top_k=top_k)
     return {"answer": generate_local_answer(question, matches), "sources": matches}
 
 
-def generate_answer(question: str, matches: list[dict], user_name: str = "") -> str:
+def generate_answer(question: str, matches: list[dict], user_name: str = "", history: list[dict] | None = None) -> str:
     load_index()
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
@@ -420,7 +575,12 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
                 },
                 {
                     "role": "user",
-                    "content": f"Usuario: {user_name or 'Usuario interno'}\n\nContexto:\n{context}\n\nPregunta: {question}",
+                    "content": (
+                        f"Usuario: {user_name or 'Usuario interno'}\n\n"
+                        f"Historial reciente:\n{history_text(history) or 'Sin historial reciente.'}\n\n"
+                        f"Contexto:\n{context}\n\n"
+                        f"Pregunta: {question}"
+                    ),
                 },
             ],
         )
@@ -430,6 +590,9 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "") -> 
 
 
 def answer_question(question: str, top_k: int = 5) -> str:
+    if wants_external_link(question):
+        return answer_with_local_knowledge(question, top_k=top_k)["answer"]
+
     verificar_result = answer_verificar_question(question)
     if verificar_result:
         return verificar_result["answer"]
@@ -441,13 +604,17 @@ def answer_question(question: str, top_k: int = 5) -> str:
         return answer_with_local_knowledge(question, top_k=top_k)["answer"]
 
 
-def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "") -> dict:
-    verificar_result = answer_verificar_question(question)
+def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "", history: list[dict] | None = None) -> dict:
+    if wants_external_link(question):
+        return answer_with_local_knowledge(question, top_k=top_k, history=history)
+
+    contextual = contextual_question(question, history)
+    verificar_result = answer_verificar_question(contextual)
     if verificar_result:
         return verificar_result
 
     try:
-        matches = retrieve(question, top_k=top_k)
-        return {"answer": generate_answer(question, matches, user_name=user_name), "sources": matches}
+        matches = retrieve(contextual, top_k=top_k)
+        return {"answer": generate_answer(question, matches, user_name=user_name, history=history), "sources": matches}
     except UserFacingError:
-        return answer_with_local_knowledge(question, top_k=top_k)
+        return answer_with_local_knowledge(question, top_k=top_k, history=history)
