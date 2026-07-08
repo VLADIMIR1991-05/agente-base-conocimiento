@@ -427,6 +427,16 @@ def posterior_adjustment_count(dims: ModuleDimensions) -> int:
     return 2 if dims.alto >= h5_height else 1
 
 
+def is_high_module(dims: ModuleDimensions) -> bool:
+    family = normalize_code(dims.tipo)
+    return family in {"A", "EA", "S", "ES"}
+
+
+def is_closet_module(dims: ModuleDimensions) -> bool:
+    family = normalize_code(dims.tipo)
+    return family in {"CL", "CLOSET", "ECL"}
+
+
 def is_base_module(dims: ModuleDimensions) -> bool:
     family = normalize_code(dims.tipo)
     return family in {"B", "BS", "MBS", "MB", "EB"}
@@ -436,53 +446,82 @@ def has_tpm(code: str) -> bool:
     return "TPM" in normalize_code(code)
 
 
-def build_piece_rows(code: str) -> list[dict[str, str | int]]:
+def requested_structure_thickness(text: str) -> int:
+    clean = normalize_code(text)
+    match = re.search(r"(?:ESPESOR|ESP|MATERIAL|CASCO|ESTRUCTURA)?\s*(15|18)\s*MM?", clean)
+    return int(match.group(1)) if match else 0
+
+
+def default_structure_thickness(dims: ModuleDimensions) -> int:
+    if is_base_module(dims):
+        return 18
+    if is_high_module(dims) or is_closet_module(dims):
+        return 15
+    return 18
+
+
+def row(piece: str, qty: int, measure: str, rule: str, thickness: int | str) -> dict[str, str | int]:
+    value = f"{thickness} mm" if isinstance(thickness, int) else thickness
+    return {"pieza": piece, "cantidad": qty, "medida": measure, "grosor": value, "regla": rule}
+
+
+def build_piece_rows(code: str, request_text: str = "") -> list[dict[str, str | int]]:
     dims = dimensions_from_code(code)
     if not dims.ancho or not dims.alto or not dims.profundidad:
         return []
 
-    thickness = 18
+    structure_thickness = requested_structure_thickness(f"{code} {request_text}") or default_structure_thickness(dims)
+    door_thickness = 18
     back_thickness = 6
-    internal_width = dims.ancho - (thickness * 2) - 1
+    internal_width = dims.ancho - (structure_thickness * 2)
+    part_width = internal_width - 1
     depth = dims.profundidad_estructura or dims.profundidad
     adjustment_width = 60
     is_base = is_base_module(dims)
     uses_tpm = is_base and has_tpm(code)
     has_top = not is_base and not module_without_top(code)
     rows: list[dict[str, str | int]] = [
-        {"pieza": "Lateral", "cantidad": 2, "medida": f"{dims.alto} x {depth} mm", "regla": "alto x profundidad del modulo"},
-        {"pieza": "Base", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"},
+        row("Lateral", 2, f"{dims.alto} x {depth} mm", "alto x profundidad del modulo", structure_thickness),
+        row("Base", 1, f"{part_width} x {depth} mm", "ancho interno menos 1mm x profundidad", structure_thickness),
     ]
     if uses_tpm:
         tpm_depth = max(depth - 52, 0)
-        rows.append({"pieza": "TPM", "cantidad": 1, "medida": f"{internal_width} x {tpm_depth} mm", "regla": "tapa premeson; usa ancho interno y descuenta 52mm de profundidad solo en esta pieza"})
+        rows.append(row("TPM", 1, f"{part_width} x {tpm_depth} mm", "ancho interno menos 1mm x profundidad menos 52mm solo en esta pieza", structure_thickness))
     elif has_top:
-        rows.append({"pieza": "Techo", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"})
+        rows.append(row("Techo", 1, f"{part_width} x {depth} mm", "ancho interno menos 1mm x profundidad", structure_thickness))
     else:
         rule = "reemplaza el techo por defecto en modulos bajos" if is_base else "reemplaza el techo cuando el modulo va sin techo"
-        rows.append({"pieza": "Ajuste superior", "cantidad": 2, "medida": f"{internal_width} x {adjustment_width} mm", "regla": rule})
+        rows.append(row("Ajuste superior", 2, f"{part_width} x {adjustment_width} mm", f"ancho interno menos 1mm x 60mm; {rule}", structure_thickness))
 
     rows.extend(
         [
-            {
-                "pieza": "Ajuste posterior",
-                "cantidad": posterior_adjustment_count(dims),
-                "medida": f"{internal_width} x {adjustment_width} mm",
-                "regla": "va en todo modulo; hasta H4 usa 1 ajuste y desde H5 usa 2 ajustes",
-            },
-            {
-                "pieza": "Respaldo",
-                "cantidad": 1,
-                "medida": f"{dims.ancho - (thickness * 2) + 10} x {dims.alto - (thickness * 2) + 10} mm",
-                "regla": f"descuenta laterales de {thickness}mm y suma ranura; respaldo base {back_thickness}mm",
-            },
+            row(
+                "Ajuste posterior",
+                posterior_adjustment_count(dims),
+                f"{part_width} x {adjustment_width} mm",
+                "ancho interno menos 1mm x 60mm; hasta H4 usa 1 ajuste y desde H5 usa 2 ajustes",
+                structure_thickness,
+            ),
+            row(
+                "Respaldo",
+                1,
+                f"{dims.ancho - (structure_thickness * 2) + 10} x {dims.alto - (structure_thickness * 2) + 10} mm",
+                f"descuenta laterales de {structure_thickness}mm y suma ranura; respaldo base {back_thickness}mm",
+                back_thickness,
+            ),
         ]
     )
 
+    if is_closet_module(dims):
+        rows.append(row("Maletera", 1, f"{part_width} x {depth} mm", "pieza horizontal de closet; usa ancho interno menos 1mm x profundidad", 18))
+
     shelf_count = extract_shelf_count(code)
+    if not shelf_count and is_high_module(dims):
+        shelf_count = 1
     if shelf_count:
         shelf_depth = depth - 110 if depth > 110 else depth
-        rows.append({"pieza": "Repisa movil", "cantidad": shelf_count, "medida": f"{internal_width - 1} x {shelf_depth} mm", "regla": "REPM descuenta 1mm al ancho interno y usa profundidad de repisa"})
+        shelf_thickness = 18 if is_closet_module(dims) else structure_thickness
+        rows.append(row("Repisa movil", shelf_count, f"{part_width} x {shelf_depth} mm", "ancho interno menos 1mm y profundidad menos 110mm", shelf_thickness))
 
     if "S/P" not in normalize_code(code):
         door_count = 2 if dims.ancho > 619 else 1
@@ -490,7 +529,7 @@ def build_piece_rows(code: str) -> list[dict[str, str | int]]:
         extra_novak = 110 if has_token(code, "NK") else 0
         henzo_discount = 35 if has_token(code, "HZ") else 0
         door_height = dims.alto + extra_novak if extra_novak else dims.alto - henzo_discount - 3
-        rows.append({"pieza": "Puerta", "cantidad": door_count, "medida": f"{door_height} x {door_width} mm", "regla": "descuenta 1.5mm por lado; Henzo descuenta 35mm; Novak suma 110mm"})
+        rows.append(row("Puerta", door_count, f"{door_height} x {door_width} mm", "descuenta 1.5mm por lado; Henzo descuenta 35mm; Novak suma 110mm", door_thickness))
     return rows
 
 
@@ -547,7 +586,7 @@ def answer_verificar_question(question: str) -> dict | None:
 
     description = interpret_code(code)
     dims = dimensions_from_code(code)
-    rows = build_piece_rows(code)
+    rows = build_piece_rows(code, question)
     source = next((str(path) for path in verificar_candidate_paths() if path.exists()), "VERIFICAR/db_codigos.js")
 
     lines = [f"Despiece interpretado para `{code}`.", ""]
@@ -561,10 +600,10 @@ def answer_verificar_question(question: str) -> dict | None:
     lines.append("")
 
     if rows:
-        lines.append("| Pieza sugerida | Cantidad | Medida esperada | Regla aplicada |")
-        lines.append("|---|---:|---|---|")
+        lines.append("| Pieza sugerida | Cantidad | Medida esperada | Grosor | Regla aplicada |")
+        lines.append("|---|---:|---|---|---|")
         for row in rows:
-            lines.append(f"| {row['pieza']} | {row['cantidad']} | {row['medida']} | {row['regla']} |")
+            lines.append(f"| {row['pieza']} | {row['cantidad']} | {row['medida']} | {row.get('grosor', '-')} | {row['regla']} |")
         lines.append("")
         lines.append("Este despiece es una propuesta tecnica calculada desde las reglas de `VERIFICAR`; si subes filas reales de piezas, se pueden validar contra estas medidas.")
     else:
