@@ -445,7 +445,7 @@ def build_piece_rows(code: str) -> list[dict[str, str | int]]:
     back_thickness = 6
     internal_width = dims.ancho - (thickness * 2) - 1
     depth = dims.profundidad_estructura or dims.profundidad
-    adjustment_width = 80
+    adjustment_width = 60
     is_base = is_base_module(dims)
     uses_tpm = is_base and has_tpm(code)
     has_top = not is_base and not module_without_top(code)
