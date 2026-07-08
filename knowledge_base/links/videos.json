@@ -1,4 +1,80 @@
 {
   "kind": "video",
-  "resources": []
+  "resources": [
+    {
+      "modulo": "FRENTES",
+      "tema": "Regulación de frentes",
+      "link": "https://youtu.be/9C0D3C5_YgY"
+    },
+    {
+      "modulo": "FRENTES",
+      "tema": "Desmontar cajón Tandembox e Intivo",
+      "link": "https://youtu.be/9Pz-y9wN9t0"
+    },
+    {
+      "modulo": "FRENTES",
+      "tema": "Desmontar frente de cajón Tandembox",
+      "link": "https://youtu.be/K-SId7K8VbU"
+    },
+    {
+      "modulo": "MÓDULOS BAJOS",
+      "tema": "Grapas de zócalo",
+      "link": "https://youtu.be/Yp0_P4N8rco"
+    },
+    {
+      "modulo": "MÓDULOS BAJOS",
+      "tema": "Montaje de patas de cocina",
+      "link": "https://youtu.be/FmJ-Yv_w2lU"
+    },
+    {
+      "modulo": "MÓDULOS BAJOS",
+      "tema": "Unión de módulos y colocación de costados",
+      "link": "https://youtu.be/83wD-f3gC08"
+    },
+    {
+      "modulo": "SISTEMAS ELEVABLES",
+      "tema": "Aventos HF montaje y regulación",
+      "link": "https://youtu.be/g6Xw_383zks"
+    },
+    {
+      "modulo": "SISTEMAS ELEVABLES",
+      "tema": "Aventos HK-S montaje y regulación",
+      "link": "https://youtu.be/0-X7lbe0XF0"
+    },
+    {
+      "modulo": "SISTEMAS ELEVABLES",
+      "tema": "Aventos HK-XS montaje y regulación",
+      "link": "https://youtu.be/9S-E4I5m9N0"
+    },
+    {
+      "modulo": "PUERTAS",
+      "tema": "Montaje y regulación de bisagras",
+      "link": "https://youtu.be/7V0P3_Z-8y8"
+    },
+    {
+      "modulo": "PUERTAS",
+      "tema": "Desmontar puertas",
+      "link": "https://youtu.be/7T6P-Yw7V8w"
+    },
+    {
+      "modulo": "ACCESORIOS",
+      "tema": "Montaje de extraíble de 150 mm",
+      "link": "https://youtu.be/4P6-V_W8z8w"
+    },
+    {
+      "modulo": "ACCESORIOS",
+      "tema": "Montaje de basurero ecológico",
+      "link": "https://youtu.be/2V0P_Z-8w8w"
+    },
+    {
+      "modulo": "CLÓSETS",
+      "tema": "Montaje de pantalonero extraíble",
+      "link": "https://youtu.be/5P6-V_W8z9w"
+    },
+    {
+      "modulo": "CLÓSETS",
+      "tema": "Montaje de tubo de colgar",
+      "link": "https://youtu.be/6P6-V_W8z0w"
+    }
+  ]
 }
