@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from verificar_knowledge import DB as VERIFICAR_DB
-from verificar_knowledge import answer_verificar_question
+from verificar_knowledge import answer_verificar_question, extract_possible_code
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -415,10 +415,41 @@ def history_text(history: list[dict] | None, limit: int = 4) -> str:
     return "\n".join(parts)
 
 
+def confirmation_followup_question(question: str, history: list[dict] | None = None) -> str:
+    current = str(question or "").strip()
+    normalized = normalize_search_text(current)
+    confirmations = {
+        "ok",
+        "okay",
+        "dale",
+        "si",
+        "sí",
+        "sigue",
+        "continua",
+        "continúa",
+        "muestrame",
+        "muéstrame",
+        "claro",
+        "correcto",
+        "de acuerdo",
+    }
+    if normalized not in confirmations or not history:
+        return current
+
+    for item in reversed(history):
+        previous_question = str(item.get("question", "")).strip()
+        previous_answer = str(item.get("answer", "")).strip()
+        combined = f"{previous_question}\n{previous_answer}"
+        code = extract_possible_code(combined)
+        if code and "despiece" in normalize_search_text(combined):
+            return f"Dame el despiece de {code}"
+    return current
+
+
 def contextual_question(question: str, history: list[dict] | None = None) -> str:
     # BLOQUE 3: continuidad de conversacion.
     # Solo une historial cuando la pregunta actual parece seguimiento del mismo tema.
-    current = str(question or "").strip()
+    current = confirmation_followup_question(question, history)
     context = history_text(history)
     if not context:
         return current
@@ -695,7 +726,7 @@ def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dic
     if verificar_result:
         try:
             verificar_result["answer"] = generate_contextual_answer(
-                question,
+                search_question,
                 verificar_result["sources"],
                 history=history,
                 draft_answer=verificar_result["answer"],
@@ -804,7 +835,7 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
     if verificar_result:
         try:
             verificar_result["answer"] = generate_contextual_answer(
-                question,
+                contextual,
                 verificar_result["sources"],
                 user_name=user_name,
                 history=history,
