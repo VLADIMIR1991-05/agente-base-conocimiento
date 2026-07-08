@@ -417,6 +417,15 @@ def posterior_adjustment_count(dims: ModuleDimensions) -> int:
     return 2 if dims.alto >= h5_height else 1
 
 
+def is_base_module(dims: ModuleDimensions) -> bool:
+    family = normalize_code(dims.tipo)
+    return family in {"B", "BS", "MBS", "MB", "EB"}
+
+
+def has_tpm(code: str) -> bool:
+    return "TPM" in normalize_code(code)
+
+
 def build_piece_rows(code: str) -> list[dict[str, str | int]]:
     dims = dimensions_from_code(code)
     if not dims.ancho or not dims.alto or not dims.profundidad:
@@ -427,15 +436,21 @@ def build_piece_rows(code: str) -> list[dict[str, str | int]]:
     internal_width = dims.ancho - (thickness * 2) - 1
     depth = dims.profundidad_estructura or dims.profundidad
     adjustment_width = 80
-    has_top = not module_without_top(code)
+    is_base = is_base_module(dims)
+    uses_tpm = is_base and has_tpm(code)
+    has_top = not is_base and not module_without_top(code)
     rows: list[dict[str, str | int]] = [
         {"pieza": "Lateral", "cantidad": 2, "medida": f"{dims.alto} x {depth} mm", "regla": "alto x profundidad del modulo"},
         {"pieza": "Base", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"},
     ]
-    if has_top:
+    if uses_tpm:
+        tpm_depth = max(depth - 52, 0)
+        rows.append({"pieza": "TPM", "cantidad": 1, "medida": f"{internal_width} x {tpm_depth} mm", "regla": "tapa premeson; usa ancho interno y descuenta 52mm de profundidad solo en esta pieza"})
+    elif has_top:
         rows.append({"pieza": "Techo", "cantidad": 1, "medida": f"{internal_width} x {depth} mm", "regla": "ancho interno x profundidad"})
     else:
-        rows.append({"pieza": "Ajuste superior", "cantidad": 2, "medida": f"{internal_width} x {adjustment_width} mm", "regla": "reemplaza el techo cuando el modulo va sin techo"})
+        rule = "reemplaza el techo por defecto en modulos bajos" if is_base else "reemplaza el techo cuando el modulo va sin techo"
+        rows.append({"pieza": "Ajuste superior", "cantidad": 2, "medida": f"{internal_width} x {adjustment_width} mm", "regla": rule})
 
     rows.extend(
         [
