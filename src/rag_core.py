@@ -6,6 +6,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from verificar_knowledge import DB as VERIFICAR_DB
@@ -344,6 +345,9 @@ def search_tokens(text: str) -> set[str]:
         "dame",
         "de",
         "del",
+        "despiece",
+        "despieza",
+        "despiezar",
         "el",
         "en",
         "es",
@@ -368,6 +372,33 @@ def search_tokens(text: str) -> set[str]:
         for token in normalize_search_text(text).split()
         if len(token) > 2 and token not in ignored
     }
+
+
+def fuzzy_ratio(left: str, right: str) -> float:
+    left = normalize_search_text(left).replace(" ", "")
+    right = normalize_search_text(right).replace(" ", "")
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def score_text_match(tokens: set[str], searchable: str, title: str = "") -> float:
+    normalized = normalize_search_text(searchable)
+    normalized_title = normalize_search_text(title)
+    score = 0.0
+    for token in tokens:
+        if token in normalized_title:
+            score += 4
+        elif token in normalized:
+            score += 1
+        else:
+            words = normalized.split()
+            best = max((fuzzy_ratio(token, word) for word in words), default=0.0)
+            if best >= 0.86:
+                score += 0.8
+            elif best >= 0.76:
+                score += 0.45
+    return score
 
 
 def history_text(history: list[dict] | None, limit: int = 4) -> str:
@@ -427,8 +458,7 @@ def retrieve_resource_links(question: str, top_k: int = 6) -> list[dict]:
                 str(resource.get("url", "")),
             ]
         )
-        normalized = normalize_search_text(searchable)
-        score = sum(3 if token in normalize_search_text(str(resource.get("title", ""))) else 1 for token in tokens if token in normalized)
+        score = score_text_match(tokens, searchable, title=str(resource.get("title", "")))
         if score:
             matches.append(
                 {
@@ -488,8 +518,8 @@ def retrieve_local_images(question: str, top_k: int = 6) -> list[dict]:
         source = str(document.source)
         if Path(source).suffix.lower() not in IMAGE_FILE_TYPES:
             continue
-        searchable = normalize_search_text(f"{source} {document.text}")
-        score = sum(3 if token in normalize_search_text(Path(source).stem) else 1 for token in tokens if token in searchable)
+        searchable = f"{source} {document.text}"
+        score = score_text_match(tokens, searchable, title=Path(source).stem)
         if score:
             matches.append(
                 {
@@ -521,8 +551,7 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
 
     for code, description in VERIFICAR_DB.items():
         searchable = f"{code} {description}"
-        normalized = normalize_search_text(searchable)
-        score = sum(4 if token in normalize_search_text(code) else 1 for token in tokens if token in normalized)
+        score = score_text_match(tokens, searchable, title=code)
         if score:
             matches.append(
                 {
@@ -541,8 +570,7 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
 
     for document in load_local_documents():
         for index, chunk in enumerate(chunk_text(document.text, chunk_size=900, overlap=100), start=1):
-            normalized = normalize_search_text(chunk)
-            score = sum(1 for token in tokens if token in normalized)
+            score = score_text_match(tokens, chunk, title=document.source)
             if score:
                 matches.append(
                     {
@@ -613,19 +641,90 @@ def generate_local_answer(question: str, matches: list[dict]) -> str:
     return f"Encontré esto en la base de conocimiento:\n\n{snippet}"
 
 
+def generate_contextual_answer(
+    question: str,
+    matches: list[dict],
+    user_name: str = "",
+    history: list[dict] | None = None,
+    draft_answer: str = "",
+) -> str:
+    if not matches and not draft_answer.strip():
+        return "No encuentro esa informacion en mi base de conocimiento."
+
+    client = get_client()
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+    context = build_context(matches[:12]) if matches else draft_answer
+    try:
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres Asistente MADEVAL, un asistente interno para consulta general de la empresa. "
+                        "No copies literalmente la base: interpreta la consulta, asocia palabras mal escritas o incompletas "
+                        "con la informacion mas cercana del contexto, cruza los datos disponibles y entrega una respuesta logica, clara y util. "
+                        "Usa solo la informacion contenida en el contexto y en el borrador tecnico entregado; no inventes datos externos. "
+                        "Si hay codigos, medidas, piezas, colores, acabados, fechas, responsables, enlaces o comparaciones, organiza la respuesta en tabla Markdown cuando ayude. "
+                        "Si el usuario pide una explicacion general, resume y estructura; si pide el dato exacto, responde directo. "
+                        "Si detectas una posible correccion de escritura, puedes decir 'entiendo que te refieres a...' de forma natural. "
+                        "No muestres fuentes, rutas, nombres de archivos, fragmentos ni citas visibles. "
+                        "Si el contexto no permite responder, di exactamente: 'No encuentro esa informacion en mi base de conocimiento.'"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Usuario: {user_name or 'Usuario interno'}\n\n"
+                        f"Historial reciente:\n{history_text(history) or 'Sin historial reciente.'}\n\n"
+                        f"Pregunta actual:\n{question}\n\n"
+                        f"Borrador tecnico recuperado:\n{draft_answer or 'Sin borrador tecnico.'}\n\n"
+                        f"Contexto recuperado desde la base de conocimiento:\n{context}"
+                    ),
+                },
+            ],
+        )
+    except Exception as error:
+        raise friendly_openai_error(error) from error
+    return strip_visible_sources(response.output_text)
+
+
 def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dict] | None = None) -> dict:
     search_question = contextual_question(question, history)
+    verificar_result = answer_verificar_question(search_question)
+    if verificar_result:
+        try:
+            verificar_result["answer"] = generate_contextual_answer(
+                question,
+                verificar_result["sources"],
+                history=history,
+                draft_answer=verificar_result["answer"],
+            )
+        except UserFacingError:
+            pass
+        return verificar_result
+
     if wants_external_link(question):
         link_matches = retrieve_resource_links(search_question, top_k=top_k)
         if link_matches:
-            return {"answer": generate_local_answer(question, link_matches), "sources": link_matches}
+            draft = generate_local_answer(question, link_matches)
+            try:
+                answer = generate_contextual_answer(question, link_matches, history=history, draft_answer=draft)
+            except UserFacingError:
+                answer = draft
+            return {"answer": answer, "sources": link_matches}
         return {
             "answer": "No tengo un enlace abierto para esa consulta todavia. Puedes agregarlo en `knowledge_base/links/` y lo entregare directamente la proxima vez.",
             "sources": [],
         }
 
     matches = retrieve_local(search_question, top_k=top_k)
-    return {"answer": generate_local_answer(question, matches), "sources": matches}
+    draft = generate_local_answer(question, matches)
+    try:
+        answer = generate_contextual_answer(question, matches, history=history, draft_answer=draft)
+    except UserFacingError:
+        answer = draft
+    return {"answer": answer, "sources": matches}
 
 
 def generate_answer(question: str, matches: list[dict], user_name: str = "", history: list[dict] | None = None) -> str:
@@ -680,7 +779,14 @@ def answer_question(question: str, top_k: int = 5) -> str:
 
     verificar_result = answer_verificar_question(question)
     if verificar_result:
-        return verificar_result["answer"]
+        try:
+            return generate_contextual_answer(
+                question,
+                verificar_result["sources"],
+                draft_answer=verificar_result["answer"],
+            )
+        except UserFacingError:
+            return verificar_result["answer"]
 
     try:
         matches = retrieve(question, top_k=top_k)
@@ -696,6 +802,16 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
     contextual = contextual_question(question, history)
     verificar_result = answer_verificar_question(contextual)
     if verificar_result:
+        try:
+            verificar_result["answer"] = generate_contextual_answer(
+                question,
+                verificar_result["sources"],
+                user_name=user_name,
+                history=history,
+                draft_answer=verificar_result["answer"],
+            )
+        except UserFacingError:
+            pass
         return verificar_result
 
     try:
