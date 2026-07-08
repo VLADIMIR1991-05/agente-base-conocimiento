@@ -19,6 +19,7 @@ from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingErro
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf", ".json"} | IMAGE_FILE_TYPES
 DB_PATH = ROOT / "data" / "usage_log.db"
+TXT_REPORT_DIR = ROOT / "informes_txt"
 ASSETS_DIR = ROOT / "assets"
 ADMIN_USERS = {
     "USUARIO": {"CONTRASEÑA", "contraseña", "CONTRASENA", "contrasena"},
@@ -857,8 +858,24 @@ PAGE = r"""<!doctype html>
       }
     });
 
-    adminLoginClose.addEventListener("click", () => adminLogin.classList.remove("active"));
-    adminClose.addEventListener("click", () => adminPanel.classList.remove("active"));
+    function closeAdminSession() {
+      const token = adminToken;
+      adminToken = "";
+      sessionStorage.removeItem("kb_admin_token");
+      adminPanel.classList.remove("active");
+      adminLogin.classList.remove("active");
+      adminPasswordEl.value = "";
+      adminLoginMessage.textContent = "";
+      if (token) {
+        fetch("/api/admin/logout", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(() => {});
+      }
+    }
+
+    adminLoginClose.addEventListener("click", closeAdminSession);
+    adminClose.addEventListener("click", closeAdminSession);
 
     async function loginAdmin() {
       adminLoginMessage.textContent = "";
@@ -970,6 +987,8 @@ def log_interaction(user_name: str, question: str, answer: str, sources: list[di
     init_db()
     now = datetime.now()
     source_names = [str(source.get("source", "")) for source in sources if source.get("source")]
+    created_at = now.isoformat(timespec="seconds")
+    date_text = now.date().isoformat()
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute(
             """
@@ -977,8 +996,8 @@ def log_interaction(user_name: str, question: str, answer: str, sources: list[di
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                now.isoformat(timespec="seconds"),
-                now.date().isoformat(),
+                created_at,
+                date_text,
                 user_name,
                 question,
                 answer,
@@ -986,6 +1005,38 @@ def log_interaction(user_name: str, question: str, answer: str, sources: list[di
                 json.dumps(images, ensure_ascii=False),
             ),
         )
+    append_txt_report(created_at, date_text, user_name, question, answer, source_names, images)
+
+
+def append_txt_report(
+    created_at: str,
+    date_text: str,
+    user_name: str,
+    question: str,
+    answer: str,
+    sources: list[str],
+    images: list[dict],
+) -> None:
+    TXT_REPORT_DIR.mkdir(exist_ok=True)
+    path = TXT_REPORT_DIR / f"informe_{date_text}.txt"
+    image_names = [str(image.get("name", "")) for image in images if image.get("name")]
+    block = [
+        "=" * 90,
+        f"Fecha/hora: {created_at}",
+        f"Usuario: {user_name}",
+        "",
+        "Pregunta:",
+        question,
+        "",
+        "Respuesta:",
+        answer,
+        "",
+        f"Fuentes internas registradas: {', '.join(sources) if sources else 'Sin fuentes registradas'}",
+        f"Imagenes: {', '.join(image_names) if image_names else 'Sin imagenes'}",
+        "",
+    ]
+    with path.open("a", encoding="utf-8") as report:
+        report.write("\n".join(block))
 
 
 def recent_interactions(limit: int = 20) -> list[dict]:
@@ -1040,43 +1091,58 @@ def all_interactions() -> list[dict]:
 def create_report_xlsx() -> bytes:
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill
+        from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ModuleNotFoundError as error:
         raise UserFacingError("Falta openpyxl para generar el reporte Excel.") from error
 
     from io import BytesIO
+    from collections import Counter
 
     rows = all_interactions()
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Reporte consultas"
-    headers = ["Usuario", "Fecha", "Pregunta", "Respuesta", "Fuentes"]
-    sheet.append(headers)
+    summary = workbook.active
+    summary.title = "Resumen"
+    detail = workbook.create_sheet("Detalle")
     header_fill = PatternFill("solid", fgColor="DFF4EA")
-    for cell in sheet[1]:
+
+    summary.append(["Usuario", "Fecha", "Consultas"])
+    counts = Counter((row["user_name"], row["date"]) for row in rows)
+    for (user_name, date_text), count in sorted(counts.items(), key=lambda item: (item[0][0].lower(), item[0][1])):
+        summary.append([user_name, date_text, count])
+    for cell in summary[1]:
         cell.font = Font(bold=True, color="00665C")
         cell.fill = header_fill
+    for index, width in enumerate([28, 18, 14], start=1):
+        summary.column_dimensions[get_column_letter(index)].width = width
 
-    current_user = None
+    headers = ["Usuario", "Fecha", "Hora", "Pregunta", "Respuesta", "Fuentes internas"]
+    detail.append(headers)
+    for cell in detail[1]:
+        cell.font = Font(bold=True, color="00665C")
+        cell.fill = header_fill
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
     for row in rows:
-        if row["user_name"] != current_user:
-            current_user = row["user_name"]
-            sheet.append([current_user, "", "", "", ""])
-            user_row = sheet.max_row
-            sheet.cell(user_row, 1).font = Font(bold=True, size=14, color="17211C")
         try:
             sources = ", ".join(json.loads(row["sources"] or "[]"))
         except json.JSONDecodeError:
             sources = row["sources"] or ""
-        sheet.append([row["user_name"], row["created_at"], row["question"], row["answer"], sources])
+        created = str(row["created_at"])
+        time_text = created.split("T", 1)[1] if "T" in created else created
+        detail.append([row["user_name"], row["date"], time_text, row["question"], row["answer"], sources])
 
-    widths = [24, 22, 44, 70, 55]
+    widths = [24, 16, 14, 48, 86, 52]
     for index, width in enumerate(widths, start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = width
-    for row in sheet.iter_rows():
-        for cell in row:
-            cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
+        detail.column_dimensions[get_column_letter(index)].width = width
+    detail.freeze_panes = "A2"
+    summary.freeze_panes = "A2"
+    for sheet in (summary, detail):
+        for row_cells in sheet.iter_rows():
+            for cell in row_cells:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+    for cell in detail["A"]:
+        cell.font = Font(bold=cell.row == 1)
 
     buffer = BytesIO()
     workbook.save(buffer)
@@ -1240,6 +1306,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/admin/login":
             self.handle_admin_login()
             return
+        if self.path == "/api/admin/logout":
+            self.handle_admin_logout()
+            return
         if self.path == "/api/ingest":
             self.handle_ingest()
             return
@@ -1259,6 +1328,12 @@ class AppHandler(BaseHTTPRequestHandler):
         token = secrets.token_urlsafe(32)
         ADMIN_SESSIONS.add(token)
         json_response(self, {"ok": True, "token": token})
+
+    def handle_admin_logout(self) -> None:
+        token = admin_token_from(self)
+        if token:
+            ADMIN_SESSIONS.discard(token)
+        json_response(self, {"ok": True})
 
     def handle_ingest(self) -> None:
         try:
