@@ -391,18 +391,54 @@ def score_text_match(tokens: set[str], searchable: str, title: str = "") -> floa
     normalized = normalize_search_text(searchable)
     normalized_title = normalize_search_text(title)
     score = 0.0
+    token_count = 0
     for token in tokens:
         if token in normalized_title:
             score += 4
+            token_count += 1
         elif token in normalized:
             score += 1
+            token_count += 1
         else:
             words = normalized.split()
             best = max((fuzzy_ratio(token, word) for word in words), default=0.0)
             if best >= 0.86:
                 score += 0.8
+                token_count += 1
             elif best >= 0.76:
                 score += 0.45
+                token_count += 1
+    if tokens and token_count == len(tokens):
+        score += 2.5
+    elif tokens and token_count >= max(1, len(tokens) - 1):
+        score += 1.2
+    return score
+
+
+def phrase_score(question: str, searchable: str, title: str = "") -> float:
+    normalized_question = normalize_search_text(question)
+    normalized_searchable = normalize_search_text(searchable)
+    normalized_title = normalize_search_text(title)
+    if not normalized_question:
+        return 0.0
+
+    score = 0.0
+    compact_question = normalized_question.replace(" ", "")
+    compact_searchable = normalized_searchable.replace(" ", "")
+    if normalized_question in normalized_title:
+        score += 10
+    if normalized_question in normalized_searchable:
+        score += 8
+    if len(compact_question) >= 4 and compact_question in compact_searchable:
+        score += 7
+
+    words = normalized_question.split()
+    for size in range(min(5, len(words)), 1, -1):
+        for start in range(0, len(words) - size + 1):
+            phrase = " ".join(words[start : start + size])
+            if phrase in normalized_searchable:
+                score += size * 1.5
+                break
     return score
 
 
@@ -671,44 +707,20 @@ def retrieve_local_images(question: str, top_k: int = 6) -> list[dict]:
     return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
 
 
-def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
-    # BLOQUE 4: busqueda local rapida sin embeddings.
-    # Prioriza enlaces organizados, luego DB de VERIFICAR, luego documentos locales.
+def retrieve_document_sweep(question: str, top_k: int = 14) -> list[dict]:
     tokens = search_tokens(question)
-    if not tokens:
+    normalized_question = normalize_search_text(question)
+    if not tokens and len(normalized_question) < 4:
         return []
 
-    matches = retrieve_resource_links(question, top_k=top_k)
-    if matches:
-        return matches
-
-    if wants_visual_answer(question):
-        matches = retrieve_local_images(question, top_k=top_k)
-        if matches:
-            return matches
-
-    for code, description in VERIFICAR_DB.items():
-        searchable = f"{code} {description}"
-        score = score_text_match(tokens, searchable, title=code)
-        if score:
-            matches.append(
-                {
-                    "source": "knowledge_base/verificar/db_codigos.js",
-                    "chunk": 1,
-                    "text": f"Codigo {code}: {description}",
-                    "score": float(score),
-                    "kind": "verificar_db",
-                    "code": code,
-                    "description": description,
-                }
-            )
-
-    if matches:
-        return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
-
+    matches = []
     for document in load_local_documents():
-        for index, chunk in enumerate(chunk_text(document.text, chunk_size=900, overlap=100), start=1):
-            score = score_text_match(tokens, chunk, title=document.source)
+        source = str(document.source)
+        if Path(source).suffix.lower() in IMAGE_FILE_TYPES:
+            continue
+        for index, chunk in enumerate(chunk_text(document.text, chunk_size=1300, overlap=220), start=1):
+            score = score_text_match(tokens, chunk, title=source) if tokens else 0.0
+            score += phrase_score(question, f"{source}\n{chunk}", title=source)
             if score:
                 matches.append(
                     {
@@ -716,10 +728,44 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
                         "chunk": index,
                         "text": chunk,
                         "score": float(score),
-                        "kind": "local_document",
+                        "kind": "document_sweep",
+                    }
+                )
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
+def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
+    # BLOQUE 4: busqueda local rapida sin embeddings.
+    # Prioriza enlaces organizados, luego DB de VERIFICAR, luego documentos locales.
+    tokens = search_tokens(question)
+    normalized_question = normalize_search_text(question)
+    if not tokens and len(normalized_question) < 4:
+        return []
+
+    matches = retrieve_resource_links(question, top_k=top_k)
+
+    if wants_visual_answer(question):
+        matches = merge_matches(matches, retrieve_local_images(question, top_k=top_k), top_k=top_k * 2)
+
+    if tokens:
+        for code, description in VERIFICAR_DB.items():
+            searchable = f"{code} {description}"
+            score = score_text_match(tokens, searchable, title=code)
+            score += phrase_score(question, searchable, title=code)
+            if score:
+                matches.append(
+                    {
+                        "source": "knowledge_base/verificar/db_codigos.js",
+                        "chunk": 1,
+                        "text": f"Codigo {code}: {description}",
+                        "score": float(score),
+                        "kind": "verificar_db",
+                        "code": code,
+                        "description": description,
                     }
                 )
 
+    matches = merge_matches(matches, retrieve_document_sweep(question, top_k=top_k * 2), top_k=top_k * 3)
     return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
 
 
@@ -816,7 +862,7 @@ def generate_contextual_answer(
 
     client = get_client()
     model = os.getenv("OPENAI_MODEL", "gpt-5.4")
-    context = build_context(matches[:12]) if matches else draft_answer
+    context = build_context(matches[:18]) if matches else draft_answer
     try:
         response = client.responses.create(
             model=model,
@@ -970,9 +1016,9 @@ def answer_question(question: str, top_k: int = 5) -> str:
         except UserFacingError:
             return verificar_result["answer"]
 
-    local_matches = retrieve_local(question, top_k=max(top_k, 8))
-    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 8))
-    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 12))
+    local_matches = retrieve_local(question, top_k=max(top_k, 18))
+    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 12))
+    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 22))
     if matches:
         draft = generate_local_answer(question, local_matches)
         try:
@@ -1003,9 +1049,9 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
             pass
         return verificar_result
 
-    local_matches = retrieve_local(contextual, top_k=max(top_k, 8))
-    index_matches = retrieve_index_if_ready(contextual, top_k=max(top_k, 8))
-    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 12))
+    local_matches = retrieve_local(contextual, top_k=max(top_k, 18))
+    index_matches = retrieve_index_if_ready(contextual, top_k=max(top_k, 12))
+    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 22))
     if matches:
         draft = generate_local_answer(question, local_matches)
         try:
