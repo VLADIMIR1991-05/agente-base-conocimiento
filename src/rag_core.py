@@ -166,7 +166,7 @@ def load_local_documents() -> list[TextDocument]:
         if path.suffix.lower() not in SUPPORTED_FILE_TYPES:
             continue
 
-        if path.suffix.lower() in {".txt", ".md", ".js"}:
+        if path.suffix.lower() in {".txt", ".md", ".js", ".json"}:
             text = read_text_file(path)
         elif path.suffix.lower() == ".docx":
             text = read_docx(path)
@@ -351,8 +351,11 @@ def search_tokens(text: str) -> set[str]:
         "el",
         "en",
         "es",
+        "existe",
+        "existen",
         "esta",
         "este",
+        "hay",
         "la",
         "las",
         "lo",
@@ -363,6 +366,8 @@ def search_tokens(text: str) -> set[str]:
         "para",
         "que",
         "quiero",
+        "tiene",
+        "tienes",
         "un",
         "una",
         "ver",
@@ -718,6 +723,31 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
     return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
 
 
+def merge_matches(*groups: list[dict], top_k: int = 12) -> list[dict]:
+    merged = []
+    seen = set()
+    for group in groups:
+        for item in group or []:
+            key = (
+                str(item.get("source", "")),
+                str(item.get("chunk", "")),
+                str(item.get("text", ""))[:160],
+                str(item.get("kind", "")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return sorted(merged, key=lambda item: float(item.get("score", 0) or 0), reverse=True)[:top_k]
+
+
+def retrieve_index_if_ready(question: str, top_k: int = 8) -> list[dict]:
+    try:
+        return retrieve(question, top_k=top_k)
+    except UserFacingError:
+        return []
+
+
 def generate_local_answer(question: str, matches: list[dict]) -> str:
     if not matches:
         return "No encuentro esa informacion en mi base de conocimiento."
@@ -940,11 +970,16 @@ def answer_question(question: str, top_k: int = 5) -> str:
         except UserFacingError:
             return verificar_result["answer"]
 
-    try:
-        matches = retrieve(question, top_k=top_k)
-        return generate_answer(question, matches)
-    except UserFacingError:
-        return answer_with_local_knowledge(question, top_k=top_k)["answer"]
+    local_matches = retrieve_local(question, top_k=max(top_k, 8))
+    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 8))
+    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 12))
+    if matches:
+        draft = generate_local_answer(question, local_matches)
+        try:
+            return generate_contextual_answer(question, matches, draft_answer=draft)
+        except UserFacingError:
+            return draft
+    return answer_with_local_knowledge(question, top_k=top_k)["answer"]
 
 
 def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "", history: list[dict] | None = None) -> dict:
@@ -968,8 +1003,20 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
             pass
         return verificar_result
 
-    try:
-        matches = retrieve(contextual, top_k=top_k)
-        return {"answer": generate_answer(question, matches, user_name=user_name, history=history), "sources": matches}
-    except UserFacingError:
-        return answer_with_local_knowledge(question, top_k=top_k, history=history)
+    local_matches = retrieve_local(contextual, top_k=max(top_k, 8))
+    index_matches = retrieve_index_if_ready(contextual, top_k=max(top_k, 8))
+    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 12))
+    if matches:
+        draft = generate_local_answer(question, local_matches)
+        try:
+            answer = generate_contextual_answer(
+                question,
+                matches,
+                user_name=user_name,
+                history=history,
+                draft_answer=draft,
+            )
+        except UserFacingError:
+            answer = draft
+        return {"answer": answer, "sources": matches}
+    return answer_with_local_knowledge(question, top_k=top_k, history=history)
