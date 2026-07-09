@@ -18,3 +18,19 @@ Si necesitas que el agente lea el contenido y responda sobre el texto, guardalo 
 Si es una imagen que debe mostrarse directamente, guardala en `imagenes/`.
 
 El objetivo es evitar informacion duplicada y mantener respuestas rapidas.
+
+## Como debe responder el agente
+
+La base de conocimiento no solo guarda documentos; tambien orienta el comportamiento del agente.
+
+El agente debe:
+
+- conectar la pregunta actual con el historial reciente;
+- responder corto cuando el dato es simple;
+- explicar mejor cuando hay reglas, pasos, comparaciones o despieces;
+- usar tablas solo cuando hacen mas clara la respuesta;
+- reconocer abreviaciones y errores de escritura si el contexto es suficiente;
+- pedir aclaracion solo cuando falte un dato clave;
+- evitar inventar informacion que no este en la base o en las reglas.
+
+La guia completa esta en `../COMPORTAMIENTO_AGENTE.md`.

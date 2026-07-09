@@ -2,6 +2,22 @@
 
 Este es un boceto funcional para probar un agente RAG que responde solo con lo que encuentre en tu base de conocimiento.
 
+## Comportamiento del agente
+
+El agente esta configurado para responder como un colaborador experto, claro y cercano:
+
+- Si la pregunta requiere un dato directo, responde corto.
+- Si la pregunta requiere analisis, pasos, comparacion, tabla o despiece, estructura mejor la respuesta.
+- Mantiene continuidad con hasta 20 interacciones recientes del mismo usuario.
+- Relaciona preguntas cortas como `ok`, `el mismo`, `hazlo en 18`, `y ese`, `explica` o `continua` con el ultimo tema valido.
+- Entiende errores de escritura y abreviaciones cuando el contexto permite corregirlas.
+- Usa tablas cuando ayudan a entender codigos, medidas, piezas, cronogramas, colores o comparativas.
+- No fuerza tablas cuando una frase clara es suficiente.
+- Si falta un dato clave, pregunta solo ese dato.
+- Si no hay informacion suficiente en la base, no inventa.
+
+La guia completa esta en `COMPORTAMIENTO_AGENTE.md`.
+
 ## Donde subir la base de conocimiento
 
 Coloca tus archivos dentro de:
@@ -121,6 +137,8 @@ La respuesta incluye descripcion, dimensiones detectadas y piezas sugeridas como
 Las busquedas directas en `VERIFICAR`, por ejemplo colores, accesorios o codigos de producto como `bardolino`, se resuelven automaticamente desde `db_codigos.js` aunque todavia no exista el indice RAG ni una `OPENAI_API_KEY`. El boton `Crear indice` queda para documentos generales que quieras responder con embeddings.
 
 El chat usa el historial reciente del usuario para continuar el hilo. Si alguien pregunta primero por `bardolino` y luego dice `y el video?`, el agente entiende que sigue hablando de Bardolino y busca enlaces de video relacionados.
+
+La memoria del chat considera hasta 20 interacciones consecutivas del mismo usuario. Esto ayuda a sostener consultas tecnicas como: primero un codigo, luego `despiece`, despues `hazlo en 18`, luego `compara con 15`.
 
 ## Base liviana de enlaces
 
