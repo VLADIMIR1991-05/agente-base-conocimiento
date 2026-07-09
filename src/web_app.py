@@ -2,6 +2,7 @@ import warnings
 
 warnings.simplefilter("ignore", DeprecationWarning)
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -19,8 +20,10 @@ from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingErro
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf", ".json"} | IMAGE_FILE_TYPES
 DB_PATH = ROOT / "data" / "usage_log.db"
+INDEX_META_PATH = ROOT / "data" / "index_meta.json"
 TXT_REPORT_DIR = ROOT / "informes_txt"
 ASSETS_DIR = ROOT / "assets"
+INDEX_BUILD_STATE = {"running": False}
 ADMIN_USERS = {
     "USUARIO": {"CONTRASEÑA", "contraseña", "CONTRASENA", "contrasena"},
 }
@@ -536,34 +539,6 @@ PAGE = r"""<!doctype html>
     </section>
 
     <section class="grid">
-      <aside class="panel">
-        <div class="panel-header">
-          <h2>Base cargada</h2>
-          <span class="pill"><i data-lucide="folder-open"></i><span id="fileCount">0</span></span>
-        </div>
-        <div class="panel-body">
-          <div class="control-box">
-            <strong>Usuario</strong>
-            <input class="text-input" id="userName" type="text" placeholder="Escribe tu nombre" autocomplete="name" />
-            <div class="file-meta">Asi puedo saludarte y mantener el hilo de lo que vas consultando.</div>
-          </div>
-          <div class="control-box" style="margin-top: 12px;">
-            <strong>Base local</strong>
-            <div class="file-meta">Copia archivos o carpetas directamente en <strong>knowledge_base</strong>; el indice es opcional para documentos largos.</div>
-            <div class="btn-row">
-              <button class="primary" type="button" id="indexBtn"><i data-lucide="refresh-cw"></i>Crear indice</button>
-            </div>
-          </div>
-          <div class="control-box" style="margin-top: 12px;">
-            <strong>Informe reciente</strong>
-            <div class="file-meta">Ultimas preguntas del historial por usuario.</div>
-            <div class="report-list" id="reportList"></div>
-          </div>
-          <div class="hint">El historial ayuda a continuar el hilo y generar informes internos.</div>
-          <div class="files" id="files"></div>
-        </div>
-      </aside>
-
       <section class="panel chat">
         <div class="messages" id="messages">
         </div>
@@ -607,14 +582,12 @@ PAGE = r"""<!doctype html>
     </div>
     <div class="admin-body">
       <div class="control-box">
-        <strong>Base local</strong>
-        <div class="file-meta"><span id="adminFileCount">0</span> archivos detectados. Copia documentos en <strong>knowledge_base</strong>; el indice es opcional para documentos largos.</div>
-        <button class="primary" type="button" id="adminIndexBtn"><i data-lucide="refresh-cw"></i>Crear indice</button>
-      </div>
-      <div class="control-box" style="margin-top: 12px;">
         <strong>Reporte de consultas</strong>
-        <div class="file-meta">Descarga el historial ordenado por usuario, preguntas, respuestas y fecha.</div>
-        <button class="secondary" type="button" id="downloadReportBtn"><i data-lucide="download"></i>Descargar Excel</button>
+        <div class="file-meta">Descarga el historial ordenado por usuario, preguntas, respuestas, fecha y calificacion.</div>
+        <div class="btn-row">
+          <button class="secondary" type="button" id="downloadReportBtn"><i data-lucide="file-spreadsheet"></i>Excel editable</button>
+          <button class="secondary" type="button" id="downloadReportPdfBtn"><i data-lucide="file-text"></i>PDF</button>
+        </div>
         <div class="report-list" id="reportList"></div>
       </div>
     </div>
@@ -625,7 +598,6 @@ PAGE = r"""<!doctype html>
     const fileCountEl = document.querySelector("#fileCount");
     const messagesEl = document.querySelector("#messages");
     const reportListEl = document.querySelector("#reportList");
-    const userNameEl = document.querySelector("#userName");
     const adminFileCountEl = document.querySelector("#adminFileCount");
     const nameGate = document.querySelector("#nameGate");
     const gateNameEl = document.querySelector("#gateName");
@@ -639,11 +611,12 @@ PAGE = r"""<!doctype html>
     const adminLoginMessage = document.querySelector("#adminLoginMessage");
     const adminPanel = document.querySelector("#adminPanel");
     const adminClose = document.querySelector("#adminClose");
-    const adminIndexBtn = document.querySelector("#adminIndexBtn");
     const downloadReportBtn = document.querySelector("#downloadReportBtn");
+    const downloadReportPdfBtn = document.querySelector("#downloadReportPdfBtn");
     const askForm = document.querySelector("#askForm");
     const questionEl = document.querySelector("#question");
     let adminToken = sessionStorage.getItem("kb_admin_token") || "";
+    let activeUserName = localStorage.getItem("kb_user_name") || "";
 
     function icons() {
       if (window.lucide) window.lucide.createIcons();
@@ -838,6 +811,7 @@ PAGE = r"""<!doctype html>
       const data = await response.json();
       if (fileCountEl) fileCountEl.textContent = data.files.length;
       if (adminFileCountEl) adminFileCountEl.textContent = data.files.length;
+      if (!filesEl) return;
       filesEl.innerHTML = "";
       for (const file of data.files) {
         const row = document.createElement("div");
@@ -880,16 +854,12 @@ PAGE = r"""<!doctype html>
     }
 
     function currentUserName() {
-      return userNameEl.value.trim();
+      return activeUserName.trim();
     }
 
-    userNameEl.value = localStorage.getItem("kb_user_name") || "";
-    gateNameEl.value = userNameEl.value;
+    gateNameEl.value = activeUserName;
     nameGate.classList.add("active");
     setTimeout(() => gateNameEl.focus(), 50);
-    userNameEl.addEventListener("input", () => {
-      localStorage.setItem("kb_user_name", currentUserName());
-    });
 
     function randomGreeting(name) {
       const greetings = [
@@ -933,7 +903,7 @@ PAGE = r"""<!doctype html>
         gateNameEl.focus();
         return;
       }
-      userNameEl.value = name;
+      activeUserName = name;
       localStorage.setItem("kb_user_name", name);
       nameGate.classList.remove("active");
       addAssistantMessage(randomGreeting(name));
@@ -944,17 +914,6 @@ PAGE = r"""<!doctype html>
     gateNameEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter") saveUserName();
     });
-
-    async function createIndex(button) {
-      button.disabled = true;
-      const response = await fetch("/api/ingest", { method: "POST" });
-      const data = await response.json();
-      addMessage(data.message, "assistant");
-      button.disabled = false;
-      await refreshFiles();
-    }
-
-    adminIndexBtn.addEventListener("click", () => createIndex(adminIndexBtn));
 
     adminOpen.addEventListener("click", () => {
       if (adminToken) {
@@ -1012,6 +971,11 @@ PAGE = r"""<!doctype html>
     downloadReportBtn.addEventListener("click", () => {
       if (!adminToken) return;
       window.location.href = `/api/report.xlsx?token=${encodeURIComponent(adminToken)}`;
+    });
+
+    downloadReportPdfBtn.addEventListener("click", () => {
+      if (!adminToken) return;
+      window.location.href = `/api/report.pdf?token=${encodeURIComponent(adminToken)}`;
     });
 
     askForm.addEventListener("submit", async (event) => {
@@ -1322,6 +1286,103 @@ def create_report_xlsx() -> bytes:
     return buffer.getvalue()
 
 
+def pdf_escape(text: str) -> str:
+    return str(text or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def wrap_pdf_text(text: str, width: int = 95, max_lines: int = 6) -> list[str]:
+    words = " ".join(str(text or "").split()).split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and len(" ".join(words)) > len(" ".join(lines)):
+        lines[-1] = lines[-1].rstrip(".") + "..."
+    return lines or [""]
+
+
+def create_report_pdf() -> bytes:
+    rows = all_interactions()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    pages: list[list[str]] = []
+    current: list[str] = []
+    y = 800
+
+    def new_page() -> None:
+        nonlocal current, y
+        if current:
+            pages.append(current)
+        current = [
+            "BT /F1 16 Tf 50 810 Td (Reporte de consultas - Asistente MADEVAL) Tj ET",
+            f"BT /F1 9 Tf 50 794 Td (Generado: {pdf_escape(now)}) Tj ET",
+        ]
+        y = 770
+
+    def add_line(text: str, size: int = 9, indent: int = 50, gap: int = 13) -> None:
+        nonlocal y
+        if y < 58:
+            new_page()
+        current.append(f"BT /F1 {size} Tf {indent} {y} Td ({pdf_escape(text)}) Tj ET")
+        y -= gap
+
+    new_page()
+    if not rows:
+        add_line("Todavia no hay consultas registradas.")
+    for row in rows:
+        created = str(row["created_at"]).replace("T", " ")
+        rating = f"{row['rating']}/5" if row["rating"] else "Pendiente"
+        add_line(f"Usuario: {row['user_name']} | Fecha: {created} | Calificacion: {rating}", size=10, gap=15)
+        add_line("Pregunta:", size=9, gap=12)
+        for line in wrap_pdf_text(row["question"], width=100, max_lines=3):
+            add_line(line, indent=64, gap=12)
+        add_line("Respuesta:", size=9, gap=12)
+        for line in wrap_pdf_text(row["answer"], width=100, max_lines=6):
+            add_line(line, indent=64, gap=12)
+        add_line("-" * 112, size=8, gap=14)
+    if current:
+        pages.append(current)
+
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>"]
+    kids = []
+    font_object_id = 3 + len(pages) * 2
+    for index, lines in enumerate(pages):
+        page_id = 3 + index * 2
+        content_id = page_id + 1
+        kids.append(f"{page_id} 0 R")
+        stream = "\n".join(lines).encode("latin-1", errors="replace")
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] "
+            f"/Resources << /Font << /F1 {font_object_id} 0 R >> >> /Contents {content_id} 0 R >>"
+        )
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream.decode('latin-1')}\nendstream")
+    objects.insert(1, f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(pages)} >>")
+    objects.append("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    body = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for object_id, payload in enumerate(objects, start=1):
+        offsets.append(len(body))
+        body.extend(f"{object_id} 0 obj\n{payload}\nendobj\n".encode("latin-1", errors="replace"))
+    xref_start = len(body)
+    body.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        body.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    body.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n".encode("ascii")
+    )
+    return bytes(body)
+
+
 def list_files() -> list[dict]:
     KNOWLEDGE_DIR.mkdir(exist_ok=True)
     files = []
@@ -1377,24 +1438,72 @@ def read_json_body(handler: BaseHTTPRequestHandler) -> dict:
     return json.loads(text or "{}")
 
 
-def ensure_index_in_background() -> None:
-    if INDEX_PATH.exists():
+def knowledge_fingerprint() -> dict:
+    KNOWLEDGE_DIR.mkdir(exist_ok=True)
+    digest = hashlib.sha256()
+    file_count = 0
+    total_size = 0
+    newest_mtime = 0
+    for path in sorted(KNOWLEDGE_DIR.rglob("*")):
+        if not path.is_file() or path.name.startswith(".") or path.name.startswith("~$") or path.name == "urls.txt":
+            continue
+        if path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
+        stat = path.stat()
+        relative = str(path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/")
+        digest.update(f"{relative}|{stat.st_size}|{stat.st_mtime_ns}\n".encode("utf-8", errors="ignore"))
+        file_count += 1
+        total_size += stat.st_size
+        newest_mtime = max(newest_mtime, stat.st_mtime_ns)
+    return {
+        "signature": digest.hexdigest(),
+        "file_count": file_count,
+        "total_size": total_size,
+        "newest_mtime": newest_mtime,
+    }
+
+
+def index_is_current(fingerprint: dict) -> bool:
+    if not fingerprint["file_count"] or not INDEX_PATH.exists():
+        return False
+    if not INDEX_META_PATH.exists():
+        return INDEX_PATH.stat().st_mtime_ns >= int(fingerprint.get("newest_mtime") or 0)
+    try:
+        current = json.loads(INDEX_META_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return INDEX_PATH.stat().st_mtime_ns >= int(fingerprint.get("newest_mtime") or 0)
+    return current.get("signature") == fingerprint.get("signature")
+
+
+def write_index_metadata(index: dict, fingerprint: dict) -> None:
+    INDEX_META_PATH.parent.mkdir(exist_ok=True)
+    payload = {
+        **fingerprint,
+        "chunks": len(index.get("chunks", [])),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    INDEX_META_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def ensure_index_in_background(force: bool = False) -> None:
+    fingerprint = knowledge_fingerprint()
+    if not force and index_is_current(fingerprint):
         return
-    has_documents = any(
-        path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS and not path.name.startswith("~$")
-        for path in KNOWLEDGE_DIR.rglob("*")
-    )
-    if not has_documents:
+    if not fingerprint["file_count"] or INDEX_BUILD_STATE["running"]:
         return
 
-    def build_missing_index() -> None:
+    def rebuild_index() -> None:
+        INDEX_BUILD_STATE["running"] = True
         try:
             index = build_index()
-            print(f"Indice creado automaticamente con {len(index['chunks'])} fragmentos.")
+            write_index_metadata(index, fingerprint)
+            print(f"Indice actualizado automaticamente con {len(index['chunks'])} fragmentos.")
         except Exception as error:
-            print(f"No se pudo crear el indice automaticamente: {error}")
+            print(f"No se pudo actualizar el indice automaticamente: {error}")
+        finally:
+            INDEX_BUILD_STATE["running"] = False
 
-    threading.Thread(target=build_missing_index, daemon=True).start()
+    threading.Thread(target=rebuild_index, daemon=True).start()
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -1407,6 +1516,9 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/report.xlsx"):
             self.handle_report_xlsx()
+            return
+        if self.path.startswith("/api/report.pdf"):
+            self.handle_report_pdf()
             return
         if self.path == "/api/report":
             if not is_admin_request(self):
@@ -1434,6 +1546,19 @@ class AppHandler(BaseHTTPRequestHandler):
         filename = f"reporte_consultas_{datetime.now().date().isoformat()}.xlsx"
         self.send_response(200)
         self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_report_pdf(self) -> None:
+        if not is_admin_request(self):
+            json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
+            return
+        body = create_report_pdf()
+        filename = f"reporte_consultas_{datetime.now().date().isoformat()}.pdf"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -1513,7 +1638,9 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def handle_ingest(self) -> None:
         try:
+            fingerprint = knowledge_fingerprint()
             index = build_index()
+            write_index_metadata(index, fingerprint)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return

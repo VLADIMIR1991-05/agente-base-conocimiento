@@ -291,7 +291,7 @@ def build_index() -> dict:
 
 def load_index() -> dict:
     if not INDEX_PATH.exists():
-        raise UserFacingError("Primero crea el indice con el boton 'Crear indice'.")
+        raise UserFacingError("El indice todavia se esta preparando. Intenta nuevamente en unos minutos.")
     return json.loads(INDEX_PATH.read_text(encoding="utf-8"))
 
 
