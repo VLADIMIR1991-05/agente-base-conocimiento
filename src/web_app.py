@@ -891,6 +891,42 @@ PAGE = r"""<!doctype html>
       localStorage.setItem("kb_user_name", currentUserName());
     });
 
+    function randomGreeting(name) {
+      const greetings = [
+        `Hola ${name}, hoy es un gran dia. En que puedo ayudarte?`,
+        `Hola ${name}, listo para ayudarte. Que necesitas revisar?`,
+        `Buen dia ${name}. En que puedo apoyarte?`,
+        `Hola ${name}, estoy atento a tu requerimiento.`,
+        `Bienvenido ${name}. Como puedo ayudarte hoy?`,
+        `Hola ${name}, cuentame que necesitas consultar.`,
+        `Buen dia ${name}. Estoy listo para ayudarte.`,
+        `Hola ${name}, dime tu requerimiento y lo reviso.`,
+        `Saludos ${name}. En que puedo asistirte?`,
+        `Hola ${name}, podemos empezar cuando gustes.`,
+        `Bienvenido ${name}. Que deseas consultar?`,
+        `Hola ${name}, estoy listo para revisar tu solicitud.`,
+        `Buen dia ${name}. Cual es tu requerimiento?`,
+        `Hola ${name}, dime como puedo ayudarte.`,
+        `Saludos ${name}. Que necesitas validar?`,
+        `Hola ${name}, estoy disponible para ayudarte.`,
+        `Bienvenido ${name}. Que revisamos hoy?`,
+        `Hola ${name}, comparte tu consulta y avanzamos.`,
+        `Buen dia ${name}. Como puedo apoyarte ahora?`,
+        `Hola ${name}, listo para atender tu consulta.`,
+        `Saludos ${name}. Que informacion necesitas?`,
+        `Hola ${name}, dime que deseas revisar.`,
+        `Bienvenido ${name}. Estoy atento a tu consulta.`,
+        `Hola ${name}, en que te puedo apoyar?`,
+        `Buen dia ${name}. Revisemos tu requerimiento.`,
+        `Hola ${name}, que necesitas resolver?`,
+        `Saludos ${name}. Estoy listo para ayudarte.`,
+        `Hola ${name}, cuentame tu consulta.`,
+        `Bienvenido ${name}. Que necesitas buscar?`,
+        `Hola ${name}, dime tu requerimiento y empezamos.`
+      ];
+      return greetings[Math.floor(Math.random() * greetings.length)];
+    }
+
     function saveUserName() {
       const name = gateNameEl.value.trim();
       if (!name) {
@@ -900,7 +936,7 @@ PAGE = r"""<!doctype html>
       userNameEl.value = name;
       localStorage.setItem("kb_user_name", name);
       nameGate.classList.remove("active");
-      addAssistantMessage(`Hola ${name}, hoy es un gran dia. En que puedo ayudarte?`);
+      addAssistantMessage(randomGreeting(name));
       questionEl.focus();
     }
 
