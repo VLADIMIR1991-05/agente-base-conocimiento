@@ -6,13 +6,15 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import threading
+import unicodedata
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question_with_sources, build_index
 
@@ -585,10 +587,36 @@ PAGE = r"""<!doctype html>
         <strong>Reporte de consultas</strong>
         <div class="file-meta">Descarga el historial ordenado por usuario, preguntas, respuestas, fecha y calificacion.</div>
         <div class="btn-row">
+          <input class="text-input" id="reportStart" type="date" title="Fecha inicial" />
+          <input class="text-input" id="reportEnd" type="date" title="Fecha final" />
+        </div>
+        <div class="btn-row">
           <button class="secondary" type="button" id="downloadReportBtn"><i data-lucide="file-spreadsheet"></i>Excel editable</button>
           <button class="secondary" type="button" id="downloadReportPdfBtn"><i data-lucide="file-text"></i>PDF</button>
         </div>
         <div class="report-list" id="reportList"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Resumen por usuario</strong>
+        <div class="report-list" id="summaryList"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Preguntas sin respuesta</strong>
+        <div class="report-list" id="unansweredList"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Base de conocimiento</strong>
+        <div class="report-list" id="knowledgeStatus"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Usuarios autorizados</strong>
+        <div class="file-meta">Estos usuarios pueden abrir reportes y opciones de super usuario.</div>
+        <div class="report-list" id="adminUsersList"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Mejorar respuestas</strong>
+        <div class="file-meta">Respuestas con calificacion baja para revisar la base o ajustar reglas.</div>
+        <div class="report-list" id="lowRatingList"></div>
       </div>
     </div>
   </section>
@@ -598,6 +626,13 @@ PAGE = r"""<!doctype html>
     const fileCountEl = document.querySelector("#fileCount");
     const messagesEl = document.querySelector("#messages");
     const reportListEl = document.querySelector("#reportList");
+    const summaryListEl = document.querySelector("#summaryList");
+    const unansweredListEl = document.querySelector("#unansweredList");
+    const knowledgeStatusEl = document.querySelector("#knowledgeStatus");
+    const adminUsersListEl = document.querySelector("#adminUsersList");
+    const lowRatingListEl = document.querySelector("#lowRatingList");
+    const reportStartEl = document.querySelector("#reportStart");
+    const reportEndEl = document.querySelector("#reportEnd");
     const adminFileCountEl = document.querySelector("#adminFileCount");
     const nameGate = document.querySelector("#nameGate");
     const gateNameEl = document.querySelector("#gateName");
@@ -833,6 +868,7 @@ PAGE = r"""<!doctype html>
       const response = await fetch("/api/report", { headers: { Authorization: `Bearer ${adminToken}` } });
       if (!response.ok) return;
       const data = await response.json();
+      renderAdminOverview(data);
       reportListEl.innerHTML = "";
       if (!data.interactions.length) {
         const empty = document.createElement("div");
@@ -851,6 +887,59 @@ PAGE = r"""<!doctype html>
         row.querySelector("span").textContent = `${item.question} - ${rating}`;
         reportListEl.appendChild(row);
       }
+    }
+
+    function renderList(container, items, emptyText, renderItem) {
+      container.innerHTML = "";
+      if (!items || !items.length) {
+        const empty = document.createElement("div");
+        empty.className = "file-meta";
+        empty.textContent = emptyText;
+        container.appendChild(empty);
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "report-item";
+        renderItem(row, item);
+        container.appendChild(row);
+      }
+    }
+
+    function renderAdminOverview(data) {
+      renderList(summaryListEl, data.summary || [], "Todavia no hay resumen.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = item.user_name;
+        row.querySelector("span").textContent = `${item.consultas} consultas | promedio ${item.promedio || "sin calificar"} | pendientes ${item.pendientes}`;
+      });
+      renderList(unansweredListEl, data.unanswered || [], "No hay preguntas sin respuesta.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = `${item.user_name} - ${new Date(item.created_at).toLocaleString()}`;
+        row.querySelector("span").textContent = item.question;
+      });
+      const status = data.knowledge || {};
+      renderList(knowledgeStatusEl, [status], "Sin datos de base.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = item.index_status || "Estado no disponible";
+        row.querySelector("span").textContent = `${item.files || 0} archivos | TXT local: ${item.txt_report_dir || ""}`;
+      });
+      renderList(adminUsersListEl, data.admin_users || [], "No hay usuarios configurados.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = item.username;
+        row.querySelector("span").textContent = item.status;
+      });
+      renderList(lowRatingListEl, data.low_ratings || [], "No hay respuestas mal calificadas.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = `${item.user_name} - ${item.rating}/5`;
+        row.querySelector("span").textContent = item.question;
+      });
+    }
+
+    function reportQuery() {
+      const params = new URLSearchParams({ token: adminToken });
+      if (reportStartEl.value) params.set("start", reportStartEl.value);
+      if (reportEndEl.value) params.set("end", reportEndEl.value);
+      return params.toString();
     }
 
     function currentUserName() {
@@ -970,12 +1059,12 @@ PAGE = r"""<!doctype html>
 
     downloadReportBtn.addEventListener("click", () => {
       if (!adminToken) return;
-      window.location.href = `/api/report.xlsx?token=${encodeURIComponent(adminToken)}`;
+      window.location.href = `/api/report.xlsx?${reportQuery()}`;
     });
 
     downloadReportPdfBtn.addEventListener("click", () => {
       if (!adminToken) return;
-      window.location.href = `/api/report.pdf?token=${encodeURIComponent(adminToken)}`;
+      window.location.href = `/api/report.pdf?${reportQuery()}`;
     });
 
     askForm.addEventListener("submit", async (event) => {
@@ -1171,20 +1260,37 @@ def append_rating_txt(row: dict, rating: int, note: str, rated_at: str) -> None:
         report.write("\n".join(block))
 
 
-def recent_interactions(limit: int = 20) -> list[dict]:
+def filtered_interactions(start_date: str = "", end_date: str = "", limit: int | None = None) -> list[dict]:
     init_db()
+    conditions = []
+    params: list[object] = []
+    if start_date:
+        conditions.append("date >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("date <= ?")
+        params.append(end_date)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    limit_sql = "LIMIT ?" if limit else ""
+    if limit:
+        params.append(limit)
     with sqlite3.connect(DB_PATH) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
-            """
+            f"""
             SELECT id, created_at, date, user_name, question, answer, sources, rating, rating_note, rated_at
             FROM interactions
+            {where}
             ORDER BY id DESC
-            LIMIT ?
+            {limit_sql}
             """,
-            (limit,),
+            params,
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def recent_interactions(limit: int = 20) -> list[dict]:
+    return filtered_interactions(limit=limit)
 
 
 def recent_user_history(user_name: str, limit: int = 20) -> list[dict]:
@@ -1206,21 +1312,75 @@ def recent_user_history(user_name: str, limit: int = 20) -> list[dict]:
     return [dict(row) for row in reversed(rows)]
 
 
-def all_interactions() -> list[dict]:
+def all_interactions(start_date: str = "", end_date: str = "") -> list[dict]:
     init_db()
-    with sqlite3.connect(DB_PATH) as connection:
-        connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            """
-            SELECT id, created_at, date, user_name, question, answer, sources, rating, rating_note, rated_at
-            FROM interactions
-            ORDER BY user_name COLLATE NOCASE, created_at DESC
-            """
-        ).fetchall()
-    return [dict(row) for row in rows]
+    rows = filtered_interactions(start_date=start_date, end_date=end_date)
+    return sorted(rows, key=lambda row: (str(row["user_name"]).lower(), str(row["created_at"])), reverse=False)
 
 
-def create_report_xlsx() -> bytes:
+def report_overview() -> dict:
+    from collections import Counter, defaultdict
+
+    rows = filtered_interactions(limit=250)
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["user_name"])].append(row)
+    summary = []
+    for user_name, group in sorted(grouped.items(), key=lambda item: item[0].lower()):
+        ratings = [int(row["rating"]) for row in group if row["rating"]]
+        questions = " ".join(str(row["question"]) for row in group).lower()
+        words = [
+            word
+            for word in re.findall(r"[a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]{4,}", questions)
+            if word.lower() not in {"para", "como", "dame", "quiero", "consulta", "muestra", "sobre"}
+        ]
+        common = ", ".join(word for word, _ in Counter(words).most_common(4))
+        summary.append(
+            {
+                "user_name": user_name,
+                "consultas": len(group),
+                "promedio": round(sum(ratings) / len(ratings), 2) if ratings else "",
+                "pendientes": len(group) - len(ratings),
+                "temas": common,
+            }
+        )
+    unanswered = [
+        row
+        for row in rows
+        if "no encuentro esa informacion" in normalize_text_for_report(row["answer"])
+        or "no pude responder" in normalize_text_for_report(row["answer"])
+    ][:20]
+    low_ratings = [row for row in rows if row["rating"] and int(row["rating"]) <= 2][:20]
+    fp = knowledge_fingerprint()
+    knowledge = {
+        "files": fp["file_count"],
+        "index_status": "Indice listo" if index_is_current(fp) else "Indice actualizandose o pendiente",
+        "last_update": datetime.fromtimestamp(fp["newest_mtime"] / 1_000_000_000).isoformat(timespec="seconds") if fp["newest_mtime"] else "",
+        "txt_report_dir": str(TXT_REPORT_DIR),
+    }
+    return {
+        "summary": summary,
+        "unanswered": unanswered,
+        "low_ratings": low_ratings,
+        "knowledge": knowledge,
+        "admin_users": [{"username": username, "status": "Activo"} for username in sorted(ADMIN_USERS)],
+    }
+
+
+def normalize_text_for_report(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", str(text or "").lower())
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+
+
+def report_filters_from_path(path: str) -> tuple[str, str]:
+    query = parse_qs(urlparse(path).query)
+    return (
+        str(query.get("start", [""])[0]).strip()[:10],
+        str(query.get("end", [""])[0]).strip()[:10],
+    )
+
+
+def create_report_xlsx(start_date: str = "", end_date: str = "") -> bytes:
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -1231,11 +1391,14 @@ def create_report_xlsx() -> bytes:
     from io import BytesIO
     from collections import Counter
 
-    rows = all_interactions()
+    rows = all_interactions(start_date=start_date, end_date=end_date)
     workbook = Workbook()
     summary = workbook.active
     summary.title = "Resumen"
     detail = workbook.create_sheet("Detalle")
+    unanswered_sheet = workbook.create_sheet("Sin respuesta")
+    improve_sheet = workbook.create_sheet("Mejorar respuestas")
+    config_sheet = workbook.create_sheet("Base y usuarios")
     header_fill = PatternFill("solid", fgColor="DFF4EA")
 
     summary.append(["Usuario", "Fecha", "Consultas", "Promedio calificacion", "Pendientes"])
@@ -1281,6 +1444,38 @@ def create_report_xlsx() -> bytes:
     for cell in detail["A"]:
         cell.font = Font(bold=cell.row == 1)
 
+    unanswered_rows = [
+        row
+        for row in rows
+        if "no encuentro esa informacion" in normalize_text_for_report(row["answer"])
+        or "no pude responder" in normalize_text_for_report(row["answer"])
+    ]
+    unanswered_sheet.append(["Usuario", "Fecha", "Pregunta", "Respuesta"])
+    for row in unanswered_rows:
+        unanswered_sheet.append([row["user_name"], row["created_at"], row["question"], row["answer"]])
+
+    improve_sheet.append(["Usuario", "Fecha", "Pregunta", "Respuesta", "Calificacion", "Comentario"])
+    for row in rows:
+        if row["rating"] and int(row["rating"]) <= 2:
+            improve_sheet.append([row["user_name"], row["created_at"], row["question"], row["answer"], row["rating"], row["rating_note"] or ""])
+
+    fp = knowledge_fingerprint()
+    config_sheet.append(["Dato", "Valor"])
+    config_sheet.append(["Archivos detectados", fp["file_count"]])
+    config_sheet.append(["Estado indice", "Indice listo" if index_is_current(fp) else "Indice actualizandose o pendiente"])
+    config_sheet.append(["Carpeta reportes TXT", str(TXT_REPORT_DIR)])
+    config_sheet.append(["Usuarios super usuario", ", ".join(sorted(ADMIN_USERS))])
+
+    for sheet in (unanswered_sheet, improve_sheet, config_sheet):
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="00665C")
+            cell.fill = header_fill
+        for index, width in enumerate([24, 22, 58, 86, 16, 36], start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
+        for row_cells in sheet.iter_rows():
+            for cell in row_cells:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
@@ -1311,8 +1506,8 @@ def wrap_pdf_text(text: str, width: int = 95, max_lines: int = 6) -> list[str]:
     return lines or [""]
 
 
-def create_report_pdf() -> bytes:
-    rows = all_interactions()
+def create_report_pdf(start_date: str = "", end_date: str = "") -> bytes:
+    rows = all_interactions(start_date=start_date, end_date=end_date)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     pages: list[list[str]] = []
     current: list[str] = []
@@ -1326,7 +1521,11 @@ def create_report_pdf() -> bytes:
             "BT /F1 16 Tf 50 810 Td (Reporte de consultas - Asistente MADEVAL) Tj ET",
             f"BT /F1 9 Tf 50 794 Td (Generado: {pdf_escape(now)}) Tj ET",
         ]
-        y = 770
+        if start_date or end_date:
+            current.append(f"BT /F1 9 Tf 50 780 Td (Rango: {pdf_escape(start_date or 'inicio')} a {pdf_escape(end_date or 'hoy')}) Tj ET")
+            y = 760
+        else:
+            y = 770
 
     def add_line(text: str, size: int = 9, indent: int = 50, gap: int = 13) -> None:
         nonlocal y
@@ -1524,7 +1723,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if not is_admin_request(self):
                 json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
                 return
-            json_response(self, {"interactions": recent_interactions()})
+            json_response(self, {"interactions": recent_interactions(), **report_overview()})
             return
         if self.path.startswith("/assets/"):
             self.handle_asset_file()
@@ -1539,7 +1738,8 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
             return
         try:
-            body = create_report_xlsx()
+            start_date, end_date = report_filters_from_path(self.path)
+            body = create_report_xlsx(start_date=start_date, end_date=end_date)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=500)
             return
@@ -1555,7 +1755,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if not is_admin_request(self):
             json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
             return
-        body = create_report_pdf()
+        start_date, end_date = report_filters_from_path(self.path)
+        body = create_report_pdf(start_date=start_date, end_date=end_date)
         filename = f"reporte_consultas_{datetime.now().date().isoformat()}.pdf"
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")

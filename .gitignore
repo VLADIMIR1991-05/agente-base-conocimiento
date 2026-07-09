@@ -6,7 +6,8 @@ work/
 data/index.json
 data/usage_log.db
 data/usage_log.db-*
-informes_txt/
+informes_txt/*
+!informes_txt/README.md
 _tmp_rating_test/
 knowledge_base/*
 !knowledge_base/.gitkeep
