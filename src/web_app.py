@@ -35,6 +35,24 @@ ROLE_LABELS = {
     "invitado": "Invitado",
     "super_usuario": "Super usuario",
 }
+ACTION_LABELS = {
+    "user_login": "Ingreso al chat",
+    "admin_login": "Ingreso super usuario",
+    "admin_logout": "Cierre super usuario",
+    "user_save": "Usuario creado o actualizado",
+}
+ROLE_PERMISSIONS = [
+    {
+        "role": "invitado",
+        "role_label": "Invitado",
+        "description": "Puede ingresar al chat y hacer consultas. No puede ver reportes ni administrar usuarios.",
+    },
+    {
+        "role": "super_usuario",
+        "role_label": "Super usuario",
+        "description": "Puede usar el chat, ver reportes, exportar Excel/PDF, revisar auditoria y administrar usuarios.",
+    },
+]
 
 
 PAGE = r"""<!doctype html>
@@ -596,6 +614,9 @@ PAGE = r"""<!doctype html>
         <div class="btn-row">
           <input class="text-input" id="reportStart" type="date" title="Fecha inicial" />
           <input class="text-input" id="reportEnd" type="date" title="Fecha final" />
+          <select class="text-input" id="reportUser" title="Filtrar por usuario">
+            <option value="">Todos los usuarios</option>
+          </select>
         </div>
         <div class="btn-row">
           <button class="secondary" type="button" id="downloadReportBtn"><i data-lucide="file-spreadsheet"></i>Excel editable</button>
@@ -605,15 +626,29 @@ PAGE = r"""<!doctype html>
       </div>
       <div class="control-box" style="margin-top: 12px;">
         <strong>Resumen por usuario</strong>
+        <div class="file-meta">Consultas, promedio de calificacion y pendientes de calificar.</div>
         <div class="report-list" id="summaryList"></div>
       </div>
       <div class="control-box" style="margin-top: 12px;">
+        <strong>Actividad y temas</strong>
+        <div class="file-meta">Usuarios mas activos y temas mas preguntados.</div>
+        <div class="report-list" id="activityList"></div>
+        <div class="report-list" id="topicList"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
         <strong>Preguntas sin respuesta</strong>
+        <div class="file-meta">Consultas donde el agente necesita mejor base o reglas.</div>
         <div class="report-list" id="unansweredList"></div>
       </div>
       <div class="control-box" style="margin-top: 12px;">
         <strong>Base de conocimiento</strong>
+        <div class="file-meta">Estado de archivos locales, indice y carpeta de informes TXT.</div>
         <div class="report-list" id="knowledgeStatus"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Permisos por rol</strong>
+        <div class="file-meta">Referencia rapida para saber que puede hacer cada tipo de usuario.</div>
+        <div class="report-list" id="permissionList"></div>
       </div>
       <div class="control-box" style="margin-top: 12px;">
         <strong>Usuarios autorizados</strong>
@@ -639,6 +674,11 @@ PAGE = r"""<!doctype html>
         <div class="file-meta">Respuestas con calificacion baja para revisar la base o ajustar reglas.</div>
         <div class="report-list" id="lowRatingList"></div>
       </div>
+      <div class="control-box" style="margin-top: 12px;">
+        <strong>Auditoria de accesos y cambios</strong>
+        <div class="file-meta">Registro interno de ingresos y cambios realizados por super usuarios.</div>
+        <div class="report-list" id="auditList"></div>
+      </div>
     </div>
   </section>
 
@@ -654,6 +694,11 @@ PAGE = r"""<!doctype html>
     const lowRatingListEl = document.querySelector("#lowRatingList");
     const reportStartEl = document.querySelector("#reportStart");
     const reportEndEl = document.querySelector("#reportEnd");
+    const reportUserEl = document.querySelector("#reportUser");
+    const activityListEl = document.querySelector("#activityList");
+    const topicListEl = document.querySelector("#topicList");
+    const permissionListEl = document.querySelector("#permissionList");
+    const auditListEl = document.querySelector("#auditList");
     const managedUsernameEl = document.querySelector("#managedUsername");
     const managedPasswordEl = document.querySelector("#managedPassword");
     const managedRoleEl = document.querySelector("#managedRole");
@@ -894,7 +939,7 @@ PAGE = r"""<!doctype html>
 
     async function refreshReport() {
       if (!adminToken) return;
-      const response = await fetch("/api/report", { headers: { Authorization: `Bearer ${adminToken}` } });
+      const response = await fetch(`/api/report?${reportQuery()}`, { headers: { Authorization: `Bearer ${adminToken}` } });
       if (!response.ok) return;
       const data = await response.json();
       renderAdminOverview(data);
@@ -936,10 +981,29 @@ PAGE = r"""<!doctype html>
     }
 
     function renderAdminOverview(data) {
+      const selectedUser = reportUserEl.value;
+      reportUserEl.innerHTML = "<option value=\"\">Todos los usuarios</option>";
+      for (const user of data.admin_users || []) {
+        const option = document.createElement("option");
+        option.value = user.username;
+        option.textContent = user.username;
+        reportUserEl.appendChild(option);
+      }
+      reportUserEl.value = selectedUser;
       renderList(summaryListEl, data.summary || [], "Todavia no hay resumen.", (row, item) => {
         row.innerHTML = "<strong></strong><span></span>";
         row.querySelector("strong").textContent = item.user_name;
-        row.querySelector("span").textContent = `${item.consultas} consultas | promedio ${item.promedio || "sin calificar"} | pendientes ${item.pendientes}`;
+        row.querySelector("span").textContent = `${item.consultas} consultas | promedio ${item.promedio || "sin calificar"} | pendientes ${item.pendientes} | temas: ${item.temas || "sin datos"}`;
+      });
+      renderList(activityListEl, data.activity || [], "Todavia no hay actividad.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = item.user_name;
+        row.querySelector("span").textContent = `${item.consultas} consultas | ultima actividad: ${item.last_seen || "sin registro"}`;
+      });
+      renderList(topicListEl, data.topics || [], "Todavia no hay temas frecuentes.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = item.topic;
+        row.querySelector("span").textContent = `${item.count} menciones`;
       });
       renderList(unansweredListEl, data.unanswered || [], "No hay preguntas sin respuesta.", (row, item) => {
         row.innerHTML = "<strong></strong><span></span>";
@@ -951,6 +1015,11 @@ PAGE = r"""<!doctype html>
         row.innerHTML = "<strong></strong><span></span>";
         row.querySelector("strong").textContent = item.index_status || "Estado no disponible";
         row.querySelector("span").textContent = `${item.files || 0} archivos | TXT local: ${item.txt_report_dir || ""}`;
+      });
+      renderList(permissionListEl, data.permissions || [], "Sin permisos configurados.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = item.role_label;
+        row.querySelector("span").textContent = item.description;
       });
       renderList(adminUsersListEl, data.admin_users || [], "No hay usuarios configurados.", (row, item) => {
         row.innerHTML = "<strong></strong><span></span><div class=\"btn-row\" style=\"margin-top:8px;\"><button class=\"secondary\" type=\"button\">Editar</button></div>";
@@ -970,12 +1039,18 @@ PAGE = r"""<!doctype html>
         row.querySelector("strong").textContent = `${item.user_name} - ${item.rating}/5`;
         row.querySelector("span").textContent = item.question;
       });
+      renderList(auditListEl, data.audit || [], "Todavia no hay auditoria.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = `${item.created_at} - ${item.actor}`;
+        row.querySelector("span").textContent = `${item.action_label}: ${item.target_user || ""} ${item.detail || ""}`.trim();
+      });
     }
 
     function reportQuery() {
       const params = new URLSearchParams({ token: adminToken });
       if (reportStartEl.value) params.set("start", reportStartEl.value);
       if (reportEndEl.value) params.set("end", reportEndEl.value);
+      if (reportUserEl.value) params.set("user", reportUserEl.value);
       return params.toString();
     }
 
@@ -1138,6 +1213,9 @@ PAGE = r"""<!doctype html>
       if (event.key === "Enter") loginAdmin();
     });
     saveManagedUserBtn.addEventListener("click", saveManagedUser);
+    reportStartEl.addEventListener("change", refreshReport);
+    reportEndEl.addEventListener("change", refreshReport);
+    reportUserEl.addEventListener("change", refreshReport);
 
     downloadReportBtn.addEventListener("click", () => {
       if (!adminToken) return;
@@ -1272,6 +1350,19 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                date TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_user TEXT,
+                detail TEXT
+            )
+            """
+        )
         existing_users = {
             str(row[0]).upper()
             for row in connection.execute("SELECT username FROM app_users").fetchall()
@@ -1367,6 +1458,47 @@ def upsert_app_user(username: str, password: str = "", role: str = "invitado", a
                     (clean_role, 1 if active else 0, now, clean_username),
                 )
     return get_app_user(clean_username) or {}
+
+
+def log_audit_event(actor: str, action: str, target_user: str = "", detail: str = "") -> None:
+    init_db()
+    now = datetime.now()
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.execute(
+            """
+            INSERT INTO audit_events (created_at, date, actor, action, target_user, detail)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(timespec="seconds"),
+                now.date().isoformat(),
+                str(actor or "sistema"),
+                str(action or "evento"),
+                str(target_user or ""),
+                str(detail or ""),
+            ),
+        )
+
+
+def recent_audit_events(limit: int = 30) -> list[dict]:
+    init_db()
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT created_at, actor, action, target_user, detail
+            FROM audit_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["action_label"] = ACTION_LABELS.get(item["action"], item["action"])
+        result.append(item)
+    return result
 
 
 def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict]) -> int:
@@ -1475,7 +1607,7 @@ def append_rating_txt(row: dict, rating: int, note: str, rated_at: str) -> None:
         report.write("\n".join(block))
 
 
-def filtered_interactions(start_date: str = "", end_date: str = "", limit: int | None = None) -> list[dict]:
+def filtered_interactions(start_date: str = "", end_date: str = "", user_name: str = "", limit: int | None = None) -> list[dict]:
     init_db()
     conditions = []
     params: list[object] = []
@@ -1485,6 +1617,9 @@ def filtered_interactions(start_date: str = "", end_date: str = "", limit: int |
     if end_date:
         conditions.append("date <= ?")
         params.append(end_date)
+    if user_name:
+        conditions.append("UPPER(user_name) = UPPER(?)")
+        params.append(user_name)
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     limit_sql = "LIMIT ?" if limit else ""
     if limit:
@@ -1504,8 +1639,8 @@ def filtered_interactions(start_date: str = "", end_date: str = "", limit: int |
     return [dict(row) for row in rows]
 
 
-def recent_interactions(limit: int = 20) -> list[dict]:
-    return filtered_interactions(limit=limit)
+def recent_interactions(limit: int = 20, user_name: str = "") -> list[dict]:
+    return filtered_interactions(user_name=user_name, limit=limit)
 
 
 def recent_user_history(user_name: str, limit: int = 20) -> list[dict]:
@@ -1527,38 +1662,57 @@ def recent_user_history(user_name: str, limit: int = 20) -> list[dict]:
     return [dict(row) for row in reversed(rows)]
 
 
-def all_interactions(start_date: str = "", end_date: str = "") -> list[dict]:
+def all_interactions(start_date: str = "", end_date: str = "", user_name: str = "") -> list[dict]:
     init_db()
-    rows = filtered_interactions(start_date=start_date, end_date=end_date)
+    rows = filtered_interactions(start_date=start_date, end_date=end_date, user_name=user_name)
     return sorted(rows, key=lambda row: (str(row["user_name"]).lower(), str(row["created_at"])), reverse=False)
 
 
-def report_overview() -> dict:
+def report_overview(start_date: str = "", end_date: str = "", user_name: str = "") -> dict:
     from collections import Counter, defaultdict
 
-    rows = filtered_interactions(limit=250)
+    rows = filtered_interactions(start_date=start_date, end_date=end_date, user_name=user_name, limit=250)
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         grouped[str(row["user_name"])].append(row)
     summary = []
-    for user_name, group in sorted(grouped.items(), key=lambda item: item[0].lower()):
+    global_words = []
+    ignored_words = {
+        "para", "como", "dame", "quiero", "consulta", "muestra", "sobre",
+        "necesito", "puedes", "favor", "empresa", "respuesta", "informacion",
+    }
+    for group_user, group in sorted(grouped.items(), key=lambda item: item[0].lower()):
         ratings = [int(row["rating"]) for row in group if row["rating"]]
         questions = " ".join(str(row["question"]) for row in group).lower()
         words = [
             word
             for word in re.findall(r"[a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]{4,}", questions)
-            if word.lower() not in {"para", "como", "dame", "quiero", "consulta", "muestra", "sobre"}
+            if word.lower() not in ignored_words
         ]
+        global_words.extend(words)
         common = ", ".join(word for word, _ in Counter(words).most_common(4))
         summary.append(
             {
-                "user_name": user_name,
+                "user_name": group_user,
                 "consultas": len(group),
                 "promedio": round(sum(ratings) / len(ratings), 2) if ratings else "",
                 "pendientes": len(group) - len(ratings),
                 "temas": common,
             }
         )
+    activity = [
+        {
+            "user_name": group_user,
+            "consultas": len(group),
+            "last_seen": max(str(row["created_at"]) for row in group).replace("T", " "),
+        }
+        for group_user, group in grouped.items()
+    ]
+    activity.sort(key=lambda item: (-int(item["consultas"]), item["user_name"].lower()))
+    topics = [
+        {"topic": word, "count": count}
+        for word, count in Counter(global_words).most_common(12)
+    ]
     unanswered = [
         row
         for row in rows
@@ -1575,9 +1729,13 @@ def report_overview() -> dict:
     }
     return {
         "summary": summary,
+        "activity": activity[:10],
+        "topics": topics,
         "unanswered": unanswered,
         "low_ratings": low_ratings,
         "knowledge": knowledge,
+        "permissions": ROLE_PERMISSIONS,
+        "audit": recent_audit_events(),
         "admin_users": [
             {
                 "username": user["username"],
@@ -1590,21 +1748,21 @@ def report_overview() -> dict:
         ],
     }
 
-
 def normalize_text_for_report(text: str) -> str:
     normalized = unicodedata.normalize("NFD", str(text or "").lower())
     return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
 
 
-def report_filters_from_path(path: str) -> tuple[str, str]:
+def report_filters_from_path(path: str) -> tuple[str, str, str]:
     query = parse_qs(urlparse(path).query)
     return (
         str(query.get("start", [""])[0]).strip()[:10],
         str(query.get("end", [""])[0]).strip()[:10],
+        str(query.get("user", [""])[0]).strip()[:80],
     )
 
 
-def create_report_xlsx(start_date: str = "", end_date: str = "") -> bytes:
+def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str = "") -> bytes:
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -1615,13 +1773,15 @@ def create_report_xlsx(start_date: str = "", end_date: str = "") -> bytes:
     from io import BytesIO
     from collections import Counter
 
-    rows = all_interactions(start_date=start_date, end_date=end_date)
+    rows = all_interactions(start_date=start_date, end_date=end_date, user_name=user_name)
     workbook = Workbook()
     summary = workbook.active
     summary.title = "Resumen"
     detail = workbook.create_sheet("Detalle")
     unanswered_sheet = workbook.create_sheet("Sin respuesta")
     improve_sheet = workbook.create_sheet("Mejorar respuestas")
+    activity_sheet = workbook.create_sheet("Actividad y temas")
+    audit_sheet = workbook.create_sheet("Auditoria")
     config_sheet = workbook.create_sheet("Base y usuarios")
     header_fill = PatternFill("solid", fgColor="DFF4EA")
 
@@ -1683,11 +1843,23 @@ def create_report_xlsx(start_date: str = "", end_date: str = "") -> bytes:
         if row["rating"] and int(row["rating"]) <= 2:
             improve_sheet.append([row["user_name"], row["created_at"], row["question"], row["answer"], row["rating"], row["rating_note"] or ""])
 
+    overview = report_overview(start_date=start_date, end_date=end_date, user_name=user_name)
+    activity_sheet.append(["Tipo", "Dato", "Detalle"])
+    for item in overview["activity"]:
+        activity_sheet.append(["Usuario activo", item["user_name"], f"{item['consultas']} consultas | ultima actividad: {item['last_seen']}"])
+    for item in overview["topics"]:
+        activity_sheet.append(["Tema frecuente", item["topic"], f"{item['count']} menciones"])
+
+    audit_sheet.append(["Fecha", "Actor", "Accion", "Usuario objetivo", "Detalle"])
+    for item in overview["audit"]:
+        audit_sheet.append([item["created_at"], item["actor"], item["action_label"], item.get("target_user", ""), item.get("detail", "")])
+
     fp = knowledge_fingerprint()
     config_sheet.append(["Dato", "Valor"])
     config_sheet.append(["Archivos detectados", fp["file_count"]])
     config_sheet.append(["Estado indice", "Indice listo" if index_is_current(fp) else "Indice actualizandose o pendiente"])
     config_sheet.append(["Carpeta reportes TXT", str(TXT_REPORT_DIR)])
+    config_sheet.append(["Filtro usuario", user_name or "Todos"])
     config_sheet.append(
         [
             "Usuarios configurados",
@@ -1698,7 +1870,7 @@ def create_report_xlsx(start_date: str = "", end_date: str = "") -> bytes:
         ]
     )
 
-    for sheet in (unanswered_sheet, improve_sheet, config_sheet):
+    for sheet in (unanswered_sheet, improve_sheet, activity_sheet, audit_sheet, config_sheet):
         for cell in sheet[1]:
             cell.font = Font(bold=True, color="00665C")
             cell.fill = header_fill
@@ -1738,8 +1910,8 @@ def wrap_pdf_text(text: str, width: int = 95, max_lines: int = 6) -> list[str]:
     return lines or [""]
 
 
-def create_report_pdf(start_date: str = "", end_date: str = "") -> bytes:
-    rows = all_interactions(start_date=start_date, end_date=end_date)
+def create_report_pdf(start_date: str = "", end_date: str = "", user_name: str = "") -> bytes:
+    rows = all_interactions(start_date=start_date, end_date=end_date, user_name=user_name)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     pages: list[list[str]] = []
     current: list[str] = []
@@ -1758,6 +1930,9 @@ def create_report_pdf(start_date: str = "", end_date: str = "") -> bytes:
             y = 760
         else:
             y = 770
+        if user_name:
+            current.append(f"BT /F1 9 Tf 50 {y} Td (Usuario: {pdf_escape(user_name)}) Tj ET")
+            y -= 14
 
     def add_line(text: str, size: int = 9, indent: int = 50, gap: int = 13) -> None:
         nonlocal y
@@ -1968,11 +2143,18 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/report.pdf"):
             self.handle_report_pdf()
             return
-        if self.path == "/api/report":
+        if urlparse(self.path).path == "/api/report":
             if not is_admin_request(self):
                 json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
                 return
-            json_response(self, {"interactions": recent_interactions(), **report_overview()})
+            start_date, end_date, user_name = report_filters_from_path(self.path)
+            json_response(
+                self,
+                {
+                    "interactions": filtered_interactions(start_date=start_date, end_date=end_date, user_name=user_name, limit=20),
+                    **report_overview(start_date=start_date, end_date=end_date, user_name=user_name),
+                },
+            )
             return
         if self.path.startswith("/assets/"):
             self.handle_asset_file()
@@ -1987,8 +2169,8 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
             return
         try:
-            start_date, end_date = report_filters_from_path(self.path)
-            body = create_report_xlsx(start_date=start_date, end_date=end_date)
+            start_date, end_date, user_name = report_filters_from_path(self.path)
+            body = create_report_xlsx(start_date=start_date, end_date=end_date, user_name=user_name)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=500)
             return
@@ -2004,8 +2186,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if not is_admin_request(self):
             json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
             return
-        start_date, end_date = report_filters_from_path(self.path)
-        body = create_report_pdf(start_date=start_date, end_date=end_date)
+        start_date, end_date, user_name = report_filters_from_path(self.path)
+        body = create_report_pdf(start_date=start_date, end_date=end_date, user_name=user_name)
         filename = f"reporte_consultas_{datetime.now().date().isoformat()}.pdf"
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
@@ -2085,6 +2267,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if not user or not user["active"] or not verify_password(password, user["password_hash"]):
             json_response(self, {"ok": False, "message": "Usuario o contrasena incorrectos."}, status=401)
             return
+        log_audit_event(user["username"], "user_login", user["username"], ROLE_LABELS.get(user["role"], user["role"]))
         json_response(
             self,
             {
@@ -2111,12 +2294,16 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         token = secrets.token_urlsafe(32)
         ADMIN_SESSIONS[token] = {"username": user["username"], "role": user["role"], "active": bool(user["active"])}
+        log_audit_event(user["username"], "admin_login", user["username"], "Ingreso al panel de super usuario")
         json_response(self, {"ok": True, "token": token, "role": user["role"], "username": user["username"]})
 
     def handle_admin_logout(self) -> None:
         token = admin_token_from(self)
+        session = current_session(self)
         if token:
             ADMIN_SESSIONS.pop(token, None)
+        if session.get("username"):
+            log_audit_event(session["username"], "admin_logout", session["username"], "Cierre del panel de super usuario")
         json_response(self, {"ok": True})
 
     def handle_admin_user_save(self) -> None:
@@ -2124,6 +2311,7 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
             return
         payload = read_json_body(self)
+        session = current_session(self)
         try:
             user = upsert_app_user(
                 username=str(payload.get("username", "")).strip(),
@@ -2134,6 +2322,10 @@ class AppHandler(BaseHTTPRequestHandler):
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return
+        detail = f"Rol: {ROLE_LABELS.get(user.get('role'), user.get('role'))}; estado: {'activo' if user.get('active') else 'desactivado'}"
+        if str(payload.get("password", "")):
+            detail += "; contraseña actualizada"
+        log_audit_event(session.get("username", "super_usuario"), "user_save", str(user.get("username", "")), detail)
         json_response(
             self,
             {
