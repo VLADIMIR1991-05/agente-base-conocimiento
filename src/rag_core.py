@@ -794,6 +794,24 @@ def retrieve_index_if_ready(question: str, top_k: int = 8) -> list[dict]:
         return []
 
 
+def collect_knowledge_matches(question: str, top_k: int = 22) -> list[dict]:
+    # Barrido amplio: combina enlaces, documentos locales, indice, imagenes y DB auxiliar.
+    # Asi una coincidencia rapida no impide que el agente use el resto de la base.
+    local_matches = retrieve_local(question, top_k=max(top_k, 18))
+    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 12))
+    sweep_matches = retrieve_document_sweep(question, top_k=max(top_k, 24))
+    link_matches = retrieve_resource_links(question, top_k=max(8, top_k // 2))
+    image_matches = retrieve_local_images(question, top_k=max(8, top_k // 2)) if wants_visual_answer(question) else []
+    return merge_matches(
+        local_matches,
+        index_matches,
+        sweep_matches,
+        link_matches,
+        image_matches,
+        top_k=max(top_k, 30),
+    )
+
+
 def generate_local_answer(question: str, matches: list[dict]) -> str:
     if not matches:
         return "No encuentro esa informacion en mi base de conocimiento."
@@ -910,41 +928,28 @@ def generate_contextual_answer(
 def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dict] | None = None) -> dict:
     search_question = contextual_question(question, history)
     verificar_result = answer_verificar_question(search_question)
-    if verificar_result:
-        if verificar_result.get("is_piece_breakdown"):
-            return verificar_result
-        try:
-            verificar_result["answer"] = generate_contextual_answer(
-                search_question,
-                verificar_result["sources"],
-                history=history,
-                draft_answer=verificar_result["answer"],
-            )
-        except UserFacingError:
-            pass
+    if verificar_result and verificar_result.get("is_piece_breakdown"):
         return verificar_result
 
+    matches = collect_knowledge_matches(search_question, top_k=max(top_k, 24))
+    if verificar_result:
+        matches = merge_matches(verificar_result.get("sources", []), matches, top_k=max(top_k, 30))
+
+    if matches:
+        draft = verificar_result.get("answer", "") if verificar_result else generate_local_answer(question, matches)
+        try:
+            answer = generate_contextual_answer(question, matches, history=history, draft_answer=draft)
+        except UserFacingError:
+            answer = draft or generate_local_answer(question, matches)
+        return {"answer": answer, "sources": matches}
+
     if wants_external_link(question):
-        link_matches = retrieve_resource_links(search_question, top_k=top_k)
-        if link_matches:
-            draft = generate_local_answer(question, link_matches)
-            try:
-                answer = generate_contextual_answer(question, link_matches, history=history, draft_answer=draft)
-            except UserFacingError:
-                answer = draft
-            return {"answer": answer, "sources": link_matches}
         return {
             "answer": "No tengo un enlace abierto para esa consulta todavia. Puedes agregarlo en `knowledge_base/links/` y lo entregare directamente la proxima vez.",
             "sources": [],
         }
 
-    matches = retrieve_local(search_question, top_k=top_k)
-    draft = generate_local_answer(question, matches)
-    try:
-        answer = generate_contextual_answer(question, matches, history=history, draft_answer=draft)
-    except UserFacingError:
-        answer = draft
-    return {"answer": answer, "sources": matches}
+    return {"answer": "No encuentro esa informacion en mi base de conocimiento.", "sources": []}
 
 
 def generate_answer(question: str, matches: list[dict], user_name: str = "", history: list[dict] | None = None) -> str:
@@ -1000,60 +1005,33 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "", his
 
 
 def answer_question(question: str, top_k: int = 5) -> str:
-    if wants_external_link(question):
-        return answer_with_local_knowledge(question, top_k=top_k)["answer"]
-
     verificar_result = answer_verificar_question(question)
-    if verificar_result:
-        if verificar_result.get("is_piece_breakdown"):
-            return verificar_result["answer"]
-        try:
-            return generate_contextual_answer(
-                question,
-                verificar_result["sources"],
-                draft_answer=verificar_result["answer"],
-            )
-        except UserFacingError:
-            return verificar_result["answer"]
+    if verificar_result and verificar_result.get("is_piece_breakdown"):
+        return verificar_result["answer"]
 
-    local_matches = retrieve_local(question, top_k=max(top_k, 18))
-    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 12))
-    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 22))
+    matches = collect_knowledge_matches(question, top_k=max(top_k, 24))
+    if verificar_result:
+        matches = merge_matches(verificar_result.get("sources", []), matches, top_k=max(top_k, 30))
     if matches:
-        draft = generate_local_answer(question, local_matches)
+        draft = verificar_result.get("answer", "") if verificar_result else generate_local_answer(question, matches)
         try:
             return generate_contextual_answer(question, matches, draft_answer=draft)
         except UserFacingError:
-            return draft
+            return draft or generate_local_answer(question, matches)
     return answer_with_local_knowledge(question, top_k=top_k)["answer"]
 
 
 def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "", history: list[dict] | None = None) -> dict:
-    if wants_external_link(question):
-        return answer_with_local_knowledge(question, top_k=top_k, history=history)
-
     contextual = contextual_question(question, history)
     verificar_result = answer_verificar_question(contextual)
-    if verificar_result:
-        if verificar_result.get("is_piece_breakdown"):
-            return verificar_result
-        try:
-            verificar_result["answer"] = generate_contextual_answer(
-                contextual,
-                verificar_result["sources"],
-                user_name=user_name,
-                history=history,
-                draft_answer=verificar_result["answer"],
-            )
-        except UserFacingError:
-            pass
+    if verificar_result and verificar_result.get("is_piece_breakdown"):
         return verificar_result
 
-    local_matches = retrieve_local(contextual, top_k=max(top_k, 18))
-    index_matches = retrieve_index_if_ready(contextual, top_k=max(top_k, 12))
-    matches = merge_matches(local_matches, index_matches, top_k=max(top_k, 22))
+    matches = collect_knowledge_matches(contextual, top_k=max(top_k, 24))
+    if verificar_result:
+        matches = merge_matches(verificar_result.get("sources", []), matches, top_k=max(top_k, 30))
     if matches:
-        draft = generate_local_answer(question, local_matches)
+        draft = verificar_result.get("answer", "") if verificar_result else generate_local_answer(question, matches)
         try:
             answer = generate_contextual_answer(
                 question,
@@ -1063,6 +1041,6 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
                 draft_answer=draft,
             )
         except UserFacingError:
-            answer = draft
+            answer = draft or generate_local_answer(question, matches)
         return {"answer": answer, "sources": matches}
     return answer_with_local_knowledge(question, top_k=top_k, history=history)
