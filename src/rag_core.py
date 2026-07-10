@@ -7,6 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 
 from verificar_knowledge import DB as VERIFICAR_DB
@@ -156,7 +157,8 @@ def read_web_page(url: str) -> str:
     return "\n".join(lines)
 
 
-def load_local_documents() -> list[TextDocument]:
+@lru_cache(maxsize=1)
+def load_local_documents() -> tuple[TextDocument, ...]:
     # BLOQUE 1: carga de archivos locales por tipo.
     # Para agregar un formato nuevo, agrega su extension arriba y su lector aqui.
     documents = []
@@ -164,6 +166,8 @@ def load_local_documents() -> list[TextDocument]:
         if not path.is_file() or path.name == "urls.txt" or path.name.startswith("~$"):
             continue
         if path.suffix.lower() not in SUPPORTED_FILE_TYPES:
+            continue
+        if path.suffix.lower() in IMAGE_FILE_TYPES:
             continue
 
         if path.suffix.lower() in {".txt", ".md", ".js", ".json"}:
@@ -176,20 +180,19 @@ def load_local_documents() -> list[TextDocument]:
             text = read_pptx(path)
         elif path.suffix.lower() == ".pdf":
             text = read_pdf(path)
-        elif path.suffix.lower() in IMAGE_FILE_TYPES:
-            text = read_image(path)
         else:
             text = ""
 
         if text.strip():
             documents.append(TextDocument(source=str(path.relative_to(ROOT)), text=text))
-    return documents
+    return tuple(documents)
 
 
-def load_web_documents() -> list[TextDocument]:
+@lru_cache(maxsize=1)
+def load_web_documents() -> tuple[TextDocument, ...]:
     url_file = KNOWLEDGE_DIR / "urls.txt"
     if not url_file.exists():
-        return []
+        return tuple()
 
     documents = []
     urls = [
@@ -201,9 +204,10 @@ def load_web_documents() -> list[TextDocument]:
         text = read_web_page(url)
         if text.strip():
             documents.append(TextDocument(source=url, text=text))
-    return documents
+    return tuple(documents)
 
 
+@lru_cache(maxsize=1)
 def load_resource_links() -> list[dict]:
     # BLOQUE 2: base liviana de enlaces.
     # Edita knowledge_base/links/*.json para agregar imagenes, videos, presentaciones o documentos por URL.
@@ -682,24 +686,41 @@ def wants_visual_answer(question: str) -> bool:
     return bool(tokens.intersection({"acabado", "acabados", "color", "colores", "foto", "fotos", "imagen", "imagenes", "mostrar", "muestra", "muestrame", "ver"}))
 
 
+def question_intent(question: str) -> str:
+    normalized = normalize_search_text(question)
+    tokens = set(normalized.split())
+    if any(token.startswith(("despiez", "despic", "despis", "despies")) for token in tokens) or tokens.intersection({"pieza", "piezas", "grosor", "espesor"}):
+        return "despiece"
+    if wants_visual_answer(question):
+        return "visual"
+    if wants_external_link(question):
+        return "link"
+    if extract_possible_code(question):
+        return "code"
+    return "general"
+
+
 def retrieve_local_images(question: str, top_k: int = 6) -> list[dict]:
     tokens = search_tokens(question)
     if not tokens:
         return []
 
     matches = []
-    for document in load_local_documents():
-        source = str(document.source)
-        if Path(source).suffix.lower() not in IMAGE_FILE_TYPES:
+    image_root = KNOWLEDGE_DIR / "imagenes"
+    image_paths = image_root.rglob("*") if image_root.exists() else []
+    for path in image_paths:
+        if not path.is_file() or path.suffix.lower() not in IMAGE_FILE_TYPES:
             continue
-        searchable = f"{source} {document.text}"
-        score = score_text_match(tokens, searchable, title=Path(source).stem)
+        source = str(path.relative_to(ROOT))
+        text = read_image(path)
+        searchable = f"{source} {text}"
+        score = score_text_match(tokens, searchable, title=path.stem)
         if score:
             matches.append(
                 {
                     "source": source,
                     "chunk": 1,
-                    "text": document.text,
+                    "text": text,
                     "score": float(score),
                     "kind": "local_image",
                 }
@@ -769,6 +790,31 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
     return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
 
 
+def retrieve_verificar_matches(question: str, top_k: int = 8) -> list[dict]:
+    tokens = search_tokens(question)
+    if not tokens:
+        return []
+
+    matches = []
+    for code, description in VERIFICAR_DB.items():
+        searchable = f"{code} {description}"
+        score = score_text_match(tokens, searchable, title=code)
+        score += phrase_score(question, searchable, title=code)
+        if score:
+            matches.append(
+                {
+                    "source": "knowledge_base/verificar/db_codigos.js",
+                    "chunk": 1,
+                    "text": f"Codigo {code}: {description}",
+                    "score": float(score),
+                    "kind": "verificar_db",
+                    "code": code,
+                    "description": description,
+                }
+            )
+    return sorted(matches, key=lambda item: item["score"], reverse=True)[:top_k]
+
+
 def merge_matches(*groups: list[dict], top_k: int = 12) -> list[dict]:
     merged = []
     seen = set()
@@ -795,19 +841,23 @@ def retrieve_index_if_ready(question: str, top_k: int = 8) -> list[dict]:
 
 
 def collect_knowledge_matches(question: str, top_k: int = 22) -> list[dict]:
-    # Barrido amplio: combina enlaces, documentos locales, indice, imagenes y DB auxiliar.
-    # Asi una coincidencia rapida no impide que el agente use el resto de la base.
-    local_matches = retrieve_local(question, top_k=max(top_k, 18))
-    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 12))
-    sweep_matches = retrieve_document_sweep(question, top_k=max(top_k, 24))
+    # Barrido amplio, pero ordenado por intencion para no hacer recorridos duplicados.
+    # Despieces y codigos se resuelven rapido; consultas generales si recorren documentos.
+    intent = question_intent(question)
     link_matches = retrieve_resource_links(question, top_k=max(8, top_k // 2))
-    image_matches = retrieve_local_images(question, top_k=max(8, top_k // 2)) if wants_visual_answer(question) else []
+    verificar_matches = retrieve_verificar_matches(question, top_k=max(10, top_k // 2))
+    image_matches = retrieve_local_images(question, top_k=max(8, top_k // 2)) if intent == "visual" else []
+    index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 12)) if intent == "general" else []
+    sweep_matches = []
+    if intent in {"general", "visual", "link"}:
+        sweep_top_k = max(top_k, 24) if intent == "general" else max(12, top_k // 2)
+        sweep_matches = retrieve_document_sweep(question, top_k=sweep_top_k)
     return merge_matches(
-        local_matches,
+        link_matches,
+        verificar_matches,
+        image_matches,
         index_matches,
         sweep_matches,
-        link_matches,
-        image_matches,
         top_k=max(top_k, 30),
     )
 
@@ -927,8 +977,9 @@ def generate_contextual_answer(
 
 def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dict] | None = None) -> dict:
     search_question = contextual_question(question, history)
+    intent = question_intent(search_question)
     verificar_result = answer_verificar_question(search_question)
-    if verificar_result and verificar_result.get("is_piece_breakdown"):
+    if verificar_result and (verificar_result.get("is_piece_breakdown") or intent == "code"):
         return verificar_result
 
     matches = collect_knowledge_matches(search_question, top_k=max(top_k, 24))
@@ -1005,8 +1056,9 @@ def generate_answer(question: str, matches: list[dict], user_name: str = "", his
 
 
 def answer_question(question: str, top_k: int = 5) -> str:
+    intent = question_intent(question)
     verificar_result = answer_verificar_question(question)
-    if verificar_result and verificar_result.get("is_piece_breakdown"):
+    if verificar_result and (verificar_result.get("is_piece_breakdown") or intent == "code"):
         return verificar_result["answer"]
 
     matches = collect_knowledge_matches(question, top_k=max(top_k, 24))
@@ -1023,8 +1075,9 @@ def answer_question(question: str, top_k: int = 5) -> str:
 
 def answer_question_with_sources(question: str, top_k: int = 5, user_name: str = "", history: list[dict] | None = None) -> dict:
     contextual = contextual_question(question, history)
+    intent = question_intent(contextual)
     verificar_result = answer_verificar_question(contextual)
-    if verificar_result and verificar_result.get("is_piece_breakdown"):
+    if verificar_result and (verificar_result.get("is_piece_breakdown") or intent == "code"):
         return verificar_result
 
     matches = collect_knowledge_matches(contextual, top_k=max(top_k, 24))
