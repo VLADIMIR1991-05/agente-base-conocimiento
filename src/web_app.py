@@ -10,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 import unicodedata
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -406,6 +407,18 @@ PAGE = r"""<!doctype html>
       border-color: var(--teal);
     }
 
+    .rating-note {
+      min-height: 32px;
+      max-width: 220px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+    }
+
     .image-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -666,6 +679,11 @@ PAGE = r"""<!doctype html>
         <div class="report-list" id="knowledgeStatus"></div>
       </div>
       <div class="control-box" style="margin-top: 12px;">
+        <strong>Diagnostico del agente</strong>
+        <div class="file-meta">Muestra la intencion detectada, modo de respuesta, coincidencias y tipos de fuentes usadas.</div>
+        <div class="report-list" id="diagnosticList"></div>
+      </div>
+      <div class="control-box" style="margin-top: 12px;">
         <strong>Permisos por rol</strong>
         <div class="file-meta">Referencia rapida para saber que puede hacer cada tipo de usuario.</div>
         <div class="report-list" id="permissionList"></div>
@@ -710,6 +728,7 @@ PAGE = r"""<!doctype html>
     const summaryListEl = document.querySelector("#summaryList");
     const unansweredListEl = document.querySelector("#unansweredList");
     const knowledgeStatusEl = document.querySelector("#knowledgeStatus");
+    const diagnosticListEl = document.querySelector("#diagnosticList");
     const adminUsersListEl = document.querySelector("#adminUsersList");
     const lowRatingListEl = document.querySelector("#lowRatingList");
     const reportStartEl = document.querySelector("#reportStart");
@@ -865,11 +884,12 @@ PAGE = r"""<!doctype html>
         button.classList.toggle("selected", Number(button.dataset.rating) === rating);
       });
       const status = box.querySelector(".rating-status");
+      const note = box.querySelector(".rating-note");
       status.textContent = "Guardando...";
       const response = await fetch("/api/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interaction_id: interactionId, rating, ...browserLocalMeta() })
+        body: JSON.stringify({ interaction_id: interactionId, rating, note: note ? note.value : "", ...browserLocalMeta() })
       });
       const data = await response.json();
       status.textContent = data.ok ? "Gracias, calificacion guardada." : (data.message || "No se pudo guardar.");
@@ -893,6 +913,18 @@ PAGE = r"""<!doctype html>
         button.addEventListener("click", () => rateAnswer(interactionId, rating, box));
         box.appendChild(button);
       }
+      const note = document.createElement("select");
+      note.className = "rating-note";
+      note.title = "Motivo opcional";
+      note.innerHTML = `
+        <option value="">Motivo opcional</option>
+        <option value="Respuesta correcta">Respuesta correcta</option>
+        <option value="No encontro informacion">No encontro informacion</option>
+        <option value="Respuesta incompleta">Respuesta incompleta</option>
+        <option value="Calculo o regla incorrecta">Calculo o regla incorrecta</option>
+        <option value="Imagen incorrecta">Imagen incorrecta</option>
+        <option value="No siguio el hilo">No siguio el hilo</option>`;
+      box.appendChild(note);
       const status = document.createElement("span");
       status.className = "rating-status";
       box.appendChild(status);
@@ -1036,7 +1068,12 @@ PAGE = r"""<!doctype html>
       renderList(knowledgeStatusEl, [status], "Sin datos de base.", (row, item) => {
         row.innerHTML = "<strong></strong><span></span>";
         row.querySelector("strong").textContent = item.index_status || "Estado no disponible";
-        row.querySelector("span").textContent = `${item.files || 0} archivos | TXT local: ${item.txt_report_dir || ""}`;
+        row.querySelector("span").textContent = `${item.files || 0} archivos | documentos: ${item.documents || 0} | imagenes: ${item.images || 0} | enlaces: ${item.links || 0} | ultima actualizacion: ${item.last_update || "sin dato"} | TXT: ${item.txt_report_dir || ""}`;
+      });
+      renderList(diagnosticListEl, data.diagnostics || [], "Todavia no hay diagnosticos.", (row, item) => {
+        row.innerHTML = "<strong></strong><span></span>";
+        row.querySelector("strong").textContent = `${item.user_name} - ${new Date(item.created_at).toLocaleString()}`;
+        row.querySelector("span").textContent = `${item.question} | ${item.summary}`;
       });
       renderList(permissionListEl, data.permissions || [], "Sin permisos configurados.", (row, item) => {
         row.innerHTML = "<strong></strong><span></span>";
@@ -1430,6 +1467,7 @@ def init_db() -> None:
                 answer TEXT NOT NULL,
                 sources TEXT NOT NULL,
                 images TEXT NOT NULL,
+                diagnostics TEXT DEFAULT '{}',
                 rating INTEGER,
                 rating_note TEXT,
                 rated_at TEXT
@@ -1443,6 +1481,8 @@ def init_db() -> None:
             connection.execute("ALTER TABLE interactions ADD COLUMN rating_note TEXT")
         if "rated_at" not in columns:
             connection.execute("ALTER TABLE interactions ADD COLUMN rated_at TEXT")
+        if "diagnostics" not in columns:
+            connection.execute("ALTER TABLE interactions ADD COLUMN diagnostics TEXT DEFAULT '{}'")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS app_users (
@@ -1606,17 +1646,18 @@ def recent_audit_events(limit: int = 30) -> list[dict]:
     return result
 
 
-def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict], event_time: datetime | None = None) -> int:
+def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict], diagnostics: dict | None = None, event_time: datetime | None = None) -> int:
     init_db()
     now = event_time or local_now()
     source_names = [str(source.get("source", "")) for source in sources if source.get("source")]
     created_at = now.isoformat(timespec="seconds")
     date_text = now.date().isoformat()
+    diagnostics_payload = diagnostics or {}
     with sqlite3.connect(DB_PATH) as connection:
         cursor = connection.execute(
             """
-            INSERT INTO interactions (created_at, date, user_name, question, answer, sources, images)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO interactions (created_at, date, user_name, question, answer, sources, images, diagnostics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 created_at,
@@ -1626,10 +1667,11 @@ def log_interaction(user_name: str, question: str, answer: str, sources: list[di
                 answer,
                 json.dumps(source_names, ensure_ascii=False),
                 json.dumps(images, ensure_ascii=False),
+                json.dumps(diagnostics_payload, ensure_ascii=False),
             ),
         )
         interaction_id = int(cursor.lastrowid)
-    append_txt_report(interaction_id, created_at, date_text, user_name, question, answer, source_names, images)
+    append_txt_report(interaction_id, created_at, date_text, user_name, question, answer, source_names, images, diagnostics_payload)
     return interaction_id
 
 
@@ -1642,6 +1684,7 @@ def append_txt_report(
     answer: str,
     sources: list[str],
     images: list[dict],
+    diagnostics: dict | None = None,
 ) -> None:
     TXT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = TXT_REPORT_DIR / f"informe_{date_text}.txt"
@@ -1660,6 +1703,7 @@ def append_txt_report(
         "",
         f"Fuentes internas registradas: {', '.join(sources) if sources else 'Sin fuentes registradas'}",
         f"Imagenes: {', '.join(image_names) if image_names else 'Sin imagenes'}",
+        f"Diagnostico: {json.dumps(diagnostics or {}, ensure_ascii=False)}",
         "Calificacion: Pendiente",
         "",
     ]
@@ -1733,7 +1777,7 @@ def filtered_interactions(start_date: str = "", end_date: str = "", user_name: s
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             f"""
-            SELECT id, created_at, date, user_name, question, answer, sources, rating, rating_note, rated_at
+            SELECT id, created_at, date, user_name, question, answer, sources, diagnostics, rating, rating_note, rated_at
             FROM interactions
             {where}
             ORDER BY id DESC
@@ -1825,9 +1869,35 @@ def report_overview(start_date: str = "", end_date: str = "", user_name: str = "
         or "no pude responder" in normalize_text_for_report(row["answer"])
     ][:20]
     low_ratings = [row for row in rows if row["rating"] and int(row["rating"]) <= 2][:20]
+    diagnostics = [
+        {
+            "user_name": row["user_name"],
+            "created_at": row["created_at"],
+            "question": row["question"],
+            "summary": diagnostic_summary(row.get("diagnostics")),
+        }
+        for row in rows[:20]
+    ]
     fp = knowledge_fingerprint()
+    kb_files = list_files()
+    image_count = sum(1 for file in kb_files if file["is_image"])
+    document_count = len(kb_files) - image_count
+    link_count = 0
+    links_dir = KNOWLEDGE_DIR / "links"
+    if links_dir.exists():
+        for link_file in links_dir.glob("*.json"):
+            try:
+                payload = json.loads(link_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            resources = payload.get("resources", payload if isinstance(payload, list) else [])
+            if isinstance(resources, list):
+                link_count += len(resources)
     knowledge = {
         "files": fp["file_count"],
+        "documents": document_count,
+        "images": image_count,
+        "links": link_count,
         "index_status": "Indice listo" if index_is_current(fp) else "Indice actualizandose o pendiente",
         "last_update": datetime.fromtimestamp(fp["newest_mtime"] / 1_000_000_000).isoformat(timespec="seconds") if fp["newest_mtime"] else "",
         "txt_report_dir": str(TXT_REPORT_DIR),
@@ -1838,6 +1908,7 @@ def report_overview(start_date: str = "", end_date: str = "", user_name: str = "
         "topics": topics,
         "unanswered": unanswered,
         "low_ratings": low_ratings,
+        "diagnostics": diagnostics,
         "knowledge": knowledge,
         "permissions": ROLE_PERMISSIONS,
         "audit": recent_audit_events(),
@@ -1856,6 +1927,30 @@ def report_overview(start_date: str = "", end_date: str = "", user_name: str = "
 def normalize_text_for_report(text: str) -> str:
     normalized = unicodedata.normalize("NFD", str(text or "").lower())
     return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+
+
+def parse_diagnostics(value: str | dict | None) -> dict:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def diagnostic_summary(value: str | dict | None) -> str:
+    data = parse_diagnostics(value)
+    if not data:
+        return "Sin diagnostico"
+    kinds = data.get("kinds", {})
+    if isinstance(kinds, dict):
+        kind_text = ", ".join(f"{key}:{count}" for key, count in kinds.items())
+    else:
+        kind_text = ""
+    elapsed = data.get("elapsed_ms")
+    elapsed_text = f" | {elapsed} ms" if elapsed not in {None, ""} else ""
+    return f"Intencion: {data.get('intent', '')} | modo: {data.get('mode', '')} | coincidencias: {data.get('matches', 0)}{elapsed_text}" + (f" | {kind_text}" if kind_text else "")
 
 
 def report_filters_from_path(path: str) -> tuple[str, str, str]:
@@ -1886,6 +1981,7 @@ def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str 
     unanswered_sheet = workbook.create_sheet("Sin respuesta")
     improve_sheet = workbook.create_sheet("Mejorar respuestas")
     activity_sheet = workbook.create_sheet("Actividad y temas")
+    diagnostics_sheet = workbook.create_sheet("Diagnostico")
     audit_sheet = workbook.create_sheet("Auditoria")
     config_sheet = workbook.create_sheet("Base y usuarios")
     header_fill = PatternFill("solid", fgColor="DFF4EA")
@@ -1904,7 +2000,7 @@ def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str 
     for index, width in enumerate([28, 18, 14, 22, 14], start=1):
         summary.column_dimensions[get_column_letter(index)].width = width
 
-    headers = ["Usuario", "Fecha", "Hora", "Pregunta", "Respuesta", "Calificacion", "Comentario calificacion", "Calificado en", "Fuentes internas"]
+    headers = ["Usuario", "Fecha", "Hora", "Pregunta", "Respuesta", "Calificacion", "Motivo/Comentario", "Calificado en", "Diagnostico", "Fuentes internas"]
     detail.append(headers)
     for cell in detail[1]:
         cell.font = Font(bold=True, color="00665C")
@@ -1919,9 +2015,9 @@ def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str 
         created = str(row["created_at"])
         time_text = created.split("T", 1)[1] if "T" in created else created
         rating = f"{row['rating']}/5" if row["rating"] else "Pendiente"
-        detail.append([row["user_name"], row["date"], time_text, row["question"], row["answer"], rating, row["rating_note"] or "", row["rated_at"] or "", sources])
+        detail.append([row["user_name"], row["date"], time_text, row["question"], row["answer"], rating, row["rating_note"] or "", row["rated_at"] or "", diagnostic_summary(row.get("diagnostics")), sources])
 
-    widths = [24, 16, 14, 48, 86, 16, 36, 22, 52]
+    widths = [24, 16, 14, 48, 86, 16, 36, 22, 54, 52]
     for index, width in enumerate(widths, start=1):
         detail.column_dimensions[get_column_letter(index)].width = width
     detail.freeze_panes = "A2"
@@ -1955,6 +2051,10 @@ def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str 
     for item in overview["topics"]:
         activity_sheet.append(["Tema frecuente", item["topic"], f"{item['count']} menciones"])
 
+    diagnostics_sheet.append(["Usuario", "Fecha", "Pregunta", "Diagnostico"])
+    for row in rows:
+        diagnostics_sheet.append([row["user_name"], row["created_at"], row["question"], diagnostic_summary(row.get("diagnostics"))])
+
     audit_sheet.append(["Fecha", "Actor", "Accion", "Usuario objetivo", "Detalle"])
     for item in overview["audit"]:
         audit_sheet.append([item["created_at"], item["actor"], item["action_label"], item.get("target_user", ""), item.get("detail", "")])
@@ -1962,6 +2062,9 @@ def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str 
     fp = knowledge_fingerprint()
     config_sheet.append(["Dato", "Valor"])
     config_sheet.append(["Archivos detectados", fp["file_count"]])
+    config_sheet.append(["Documentos", overview["knowledge"].get("documents", 0)])
+    config_sheet.append(["Imagenes", overview["knowledge"].get("images", 0)])
+    config_sheet.append(["Enlaces configurados", overview["knowledge"].get("links", 0)])
     config_sheet.append(["Estado indice", "Indice listo" if index_is_current(fp) else "Indice actualizandose o pendiente"])
     config_sheet.append(["Carpeta reportes TXT", str(TXT_REPORT_DIR)])
     config_sheet.append(["Filtro usuario", user_name or "Todos"])
@@ -1975,7 +2078,7 @@ def create_report_xlsx(start_date: str = "", end_date: str = "", user_name: str 
         ]
     )
 
-    for sheet in (unanswered_sheet, improve_sheet, activity_sheet, audit_sheet, config_sheet):
+    for sheet in (unanswered_sheet, improve_sheet, activity_sheet, diagnostics_sheet, audit_sheet, config_sheet):
         for cell in sheet[1]:
             cell.font = Font(bold=True, color="00665C")
             cell.fill = header_fill
@@ -2058,6 +2161,9 @@ def create_report_pdf(start_date: str = "", end_date: str = "", user_name: str =
             add_line(line, indent=64, gap=12)
         add_line("Respuesta:", size=9, gap=12)
         for line in wrap_pdf_text(row["answer"], width=100, max_lines=6):
+            add_line(line, indent=64, gap=12)
+        add_line("Diagnostico:", size=9, gap=12)
+        for line in wrap_pdf_text(diagnostic_summary(row.get("diagnostics")), width=100, max_lines=2):
             add_line(line, indent=64, gap=12)
         add_line("-" * 112, size=8, gap=14)
     if current:
@@ -2490,13 +2596,17 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         try:
             history = recent_user_history(user_name)
+            started = time.perf_counter()
             result = answer_question_with_sources(question, user_name=user_name, history=history)
+            elapsed_ms = round((time.perf_counter() - started) * 1000)
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return
         except Exception as error:
             json_response(self, {"ok": False, "message": f"No pude responder todavia. Revisa la configuracion e intenta otra vez. Detalle: {error}"}, status=500)
             return
+        diagnostics = dict(result.get("diagnostics") or {})
+        diagnostics["elapsed_ms"] = elapsed_ms
         image_candidates = []
         seen = set()
         combined_text = f"{question} {result['answer']}".lower()
@@ -2522,7 +2632,7 @@ class AppHandler(BaseHTTPRequestHandler):
         ]
         images = matched_images or image_candidates
         images = images[:4]
-        interaction_id = log_interaction(user_name, question, result["answer"], result["sources"], images, event_time=event_time)
+        interaction_id = log_interaction(user_name, question, result["answer"], result["sources"], images, diagnostics=diagnostics, event_time=event_time)
         json_response(self, {"ok": True, "answer": result["answer"], "images": images, "interaction_id": interaction_id})
 
     def handle_rate(self) -> None:

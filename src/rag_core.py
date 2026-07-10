@@ -862,6 +862,22 @@ def collect_knowledge_matches(question: str, top_k: int = 22) -> list[dict]:
     )
 
 
+def build_diagnostics(question: str, matches: list[dict], answer_mode: str = "", elapsed_ms: int | None = None) -> dict:
+    kinds: dict[str, int] = {}
+    for match in matches or []:
+        kind = str(match.get("kind") or "fuente")
+        kinds[kind] = kinds.get(kind, 0) + 1
+    sources = [str(match.get("source", "")) for match in matches or [] if match.get("source")]
+    return {
+        "intent": question_intent(question),
+        "mode": answer_mode or "rag",
+        "matches": len(matches or []),
+        "kinds": kinds,
+        "sources_preview": sources[:8],
+        "elapsed_ms": elapsed_ms,
+    }
+
+
 def generate_local_answer(question: str, matches: list[dict]) -> str:
     if not matches:
         return "No encuentro esa informacion en mi base de conocimiento."
@@ -980,6 +996,7 @@ def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dic
     intent = question_intent(search_question)
     verificar_result = answer_verificar_question(search_question)
     if verificar_result and (verificar_result.get("is_piece_breakdown") or intent == "code"):
+        verificar_result["diagnostics"] = build_diagnostics(search_question, verificar_result.get("sources", []), "verificar")
         return verificar_result
 
     matches = collect_knowledge_matches(search_question, top_k=max(top_k, 24))
@@ -992,7 +1009,7 @@ def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dic
             answer = generate_contextual_answer(question, matches, history=history, draft_answer=draft)
         except UserFacingError:
             answer = draft or generate_local_answer(question, matches)
-        return {"answer": answer, "sources": matches}
+        return {"answer": answer, "sources": matches, "diagnostics": build_diagnostics(search_question, matches, "rag")}
 
     if wants_external_link(question):
         return {
@@ -1000,7 +1017,7 @@ def answer_with_local_knowledge(question: str, top_k: int = 8, history: list[dic
             "sources": [],
         }
 
-    return {"answer": "No encuentro esa informacion en mi base de conocimiento.", "sources": []}
+    return {"answer": "No encuentro esa informacion en mi base de conocimiento.", "sources": [], "diagnostics": build_diagnostics(search_question, [], "sin_resultados")}
 
 
 def generate_answer(question: str, matches: list[dict], user_name: str = "", history: list[dict] | None = None) -> str:
@@ -1078,6 +1095,7 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
     intent = question_intent(contextual)
     verificar_result = answer_verificar_question(contextual)
     if verificar_result and (verificar_result.get("is_piece_breakdown") or intent == "code"):
+        verificar_result["diagnostics"] = build_diagnostics(contextual, verificar_result.get("sources", []), "verificar")
         return verificar_result
 
     matches = collect_knowledge_matches(contextual, top_k=max(top_k, 24))
@@ -1095,5 +1113,5 @@ def answer_question_with_sources(question: str, top_k: int = 5, user_name: str =
             )
         except UserFacingError:
             answer = draft or generate_local_answer(question, matches)
-        return {"answer": answer, "sources": matches}
+        return {"answer": answer, "sources": matches, "diagnostics": build_diagnostics(contextual, matches, "rag")}
     return answer_with_local_knowledge(question, top_k=top_k, history=history)

@@ -476,6 +476,10 @@ def has_token(code: str, token: str) -> bool:
     return token in re.split(r"[-+]", normalize_code(code))
 
 
+def has_code_marker(code: str, marker: str) -> bool:
+    return normalize_code(marker) in normalize_code(code)
+
+
 def extract_shelf_count(code: str) -> int:
     counts = [int(match.group(1)) for match in re.finditer(r"(?<!H)(\d+)R(?:P|EP)?", normalize_code(code))]
     return max(counts) if counts else 0
@@ -593,10 +597,15 @@ def build_piece_rows(code: str, request_text: str = "") -> list[dict[str, str | 
     if "S/P" not in normalize_code(code):
         door_count = 2 if dims.ancho >= rule_int("puertas", "dos_puertas_desde_ancho", 620) else 1
         door_width = round(dims.ancho / door_count) - rule_int("descuentos", "puerta_ancho_total", 3)
-        extra_novak = rule_int("descuentos", "puerta_novak", 110) if has_token(code, "NK") else 0
-        henzo_discount = rule_int("descuentos", "puerta_henzo", 35) if has_token(code, "HZ") else 0
+        extra_novak = rule_int("descuentos", "puerta_novak", 110) if has_code_marker(code, "NK") else 0
+        henzo_discount = rule_int("descuentos", "puerta_henzo", 35) if has_code_marker(code, "HZ") else 0
         door_height = dims.alto + extra_novak if extra_novak else dims.alto - henzo_discount - rule_int("descuentos", "puerta_alto", 3)
-        rows.append(row("Puerta", door_count, f"{door_height} x {door_width} mm", "descuenta 1.5mm por lado; Henzo descuenta 35mm; Novak suma 110mm", door_thickness))
+        rule = "ancho modulo / cantidad puertas menos 3mm; alto modulo menos 3mm"
+        if henzo_discount:
+            rule += f"; HZ/Henzo detectado, descuenta {henzo_discount}mm adicionales en alto"
+        if extra_novak:
+            rule += f"; NK/Novak detectado, suma {extra_novak}mm en alto"
+        rows.append(row("Puerta", door_count, f"{door_height} x {door_width} mm", rule, door_thickness))
     return rows
 
 
@@ -711,6 +720,6 @@ def answer_verificar_question(question: str) -> dict | None:
 
     return {
         "answer": "\n".join(lines),
-        "sources": [{"source": source, "chunk": 1, "text": json.dumps({"code": code, "description": description}, ensure_ascii=False), "score": 1.0}],
+        "sources": [{"source": source, "chunk": 1, "text": json.dumps({"code": code, "description": description}, ensure_ascii=False), "score": 1.0, "kind": "verificar"}],
         "is_piece_breakdown": include_piece_rows,
     }
