@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from verificar_knowledge import DB as VERIFICAR_DB
-from verificar_knowledge import answer_verificar_question, dimensions_from_code, extract_possible_code
+from verificar_knowledge import answer_verificar_question, dimensions_from_code, extract_possible_code, normalize_code
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +24,72 @@ IMAGE_FILE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 DOCUMENT_FILE_TYPES = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf"}
 CODE_FILE_TYPES = {".js", ".json"}
 SUPPORTED_FILE_TYPES = DOCUMENT_FILE_TYPES | CODE_FILE_TYPES | IMAGE_FILE_TYPES
+
+DESPIECE_KEYWORDS = {
+    "calcula",
+    "calcular",
+    "corte",
+    "cortes",
+    "desglosa",
+    "desglosame",
+    "desglose",
+    "despiece",
+    "despieza",
+    "despiezar",
+    "despiec",
+    "despic",
+    "despis",
+    "despies",
+    "despise",
+    "dimension",
+    "dimensiones",
+    "estructura",
+    "espesor",
+    "grosor",
+    "material",
+    "medida",
+    "medidas",
+    "modulo",
+    "mueble",
+    "pieza",
+    "piezas",
+}
+FOLLOWUP_KEYWORDS = {
+    "anterior",
+    "continua",
+    "de",
+    "del",
+    "ese",
+    "esa",
+    "eso",
+    "este",
+    "esta",
+    "estos",
+    "estas",
+    "igual",
+    "lo",
+    "mismo",
+    "misma",
+    "para",
+    "sigue",
+    "tambien",
+    "ultimo",
+    "ultima",
+}
+CONFIRMATION_KEYWORDS = {
+    "claro",
+    "continua",
+    "correcto",
+    "dale",
+    "de acuerdo",
+    "muestrame",
+    "ok",
+    "okay",
+    "si",
+    "sigue",
+}
+VISUAL_KEYWORDS = {"acabado", "acabados", "color", "colores", "foto", "fotos", "imagen", "imagenes", "mostrar", "muestra", "muestrame", "ver"}
+LINK_KEYWORDS = {"enlace", "enlaces", "link", "links", "url", "video", "videos", "presentacion", "presentaciones", "powerpoint", "ppt", "pptx"}
 
 
 class UserFacingError(RuntimeError):
@@ -460,6 +526,33 @@ def history_text(history: list[dict] | None, limit: int = 20) -> str:
     return "\n".join(parts)
 
 
+def module_code_candidates(text: str) -> list[str]:
+    value = normalize_code(text)
+    raw_candidates = re.findall(r"\b[A-Z]+[A-Z0-9/+=.,-]*\d[A-Z0-9/+=.,-]*\b", value)
+    codes: list[str] = []
+    for candidate in raw_candidates:
+        code = candidate.strip(".,;:")
+        dims = dimensions_from_code(code)
+        if dims.ancho and dims.alto and dims.profundidad and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def extract_module_code(text: str) -> str:
+    candidates = module_code_candidates(text)
+    return sorted(candidates, key=len, reverse=True)[0] if candidates else ""
+
+
+def contains_marker_word(question: str, marker: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(marker)}\b", normalize_code(question)))
+
+
+def add_code_marker(code: str, marker: str) -> str:
+    clean = normalize_code(code)
+    marker = normalize_code(marker)
+    return clean if marker in clean else f"{clean}{marker}"
+
+
 def confirmation_followup_question(question: str, history: list[dict] | None = None) -> str:
     current = str(question or "").strip()
     normalized = normalize_search_text(current)
@@ -478,21 +571,12 @@ def confirmation_followup_question(question: str, history: list[dict] | None = N
         "correcto",
         "de acuerdo",
     }
-    if normalized not in confirmations or not history:
+    if followup_thickness(current) or normalized not in confirmations or not history:
         return current
 
-    for item in reversed(history):
-        previous_question = str(item.get("question", "")).strip()
-        previous_answer = str(item.get("answer", "")).strip()
-        combined = f"{previous_question}\n{previous_answer}"
-        combined_normalized = normalize_search_text(combined)
-        code = extract_possible_code(combined)
-        offered_piece_breakdown = any(
-            marker in combined_normalized
-            for marker in {"despiece", "desglos", "pieza", "piezas", "modulo", "mueble"}
-        )
-        if code and offered_piece_breakdown:
-            return f"Dame el despiece de {code}"
+    code = latest_code_from_history(history)
+    if code:
+        return f"Dame el despiece de {code}"
     return current
 
 
@@ -500,17 +584,8 @@ def latest_code_from_history(history: list[dict] | None) -> str:
     if not history:
         return ""
     for item in reversed(history):
-        for value in (str(item.get("question", "")), str(item.get("answer", ""))):
-            candidates = re.findall(r"\b[A-Z]+[A-Z0-9/+=.,-]*\d[A-Z0-9/+=.,-]*\b", value.upper())
-            for candidate in candidates:
-                code = candidate.strip(".,;:")
-                dims = dimensions_from_code(code)
-                if dims.ancho and dims.alto and dims.profundidad:
-                    return code
-        combined = f"{item.get('question', '')}\n{item.get('answer', '')}"
-        code = extract_possible_code(combined)
-        dims = dimensions_from_code(code) if code else None
-        if code and dims and dims.ancho and dims.alto and dims.profundidad:
+        code = extract_module_code(str(item.get("question", "")))
+        if code:
             return code
     return ""
 
@@ -523,31 +598,23 @@ def followup_thickness(question: str) -> int:
 
 def piece_breakdown_followup_question(question: str, history: list[dict] | None = None) -> str:
     current = str(question or "").strip()
-    if extract_possible_code(current):
+    if extract_module_code(current):
         return current
 
     normalized = normalize_search_text(current)
+    tokens = set(normalized.split())
     thickness = followup_thickness(current)
-    markers = {
-        "despiece",
-        "despieza",
-        "despiezar",
-        "pieza",
-        "piezas",
-        "mueble",
-        "modulo",
-        "mismo",
-        "misma",
-        "grosor",
-        "espesor",
-        "material",
-    }
-    if not thickness and not set(normalized.split()).intersection(markers):
+    has_piece_marker = bool(tokens.intersection(DESPIECE_KEYWORDS | FOLLOWUP_KEYWORDS))
+    has_henzo_correction = contains_marker_word(current, "HZ")
+    if not thickness and not has_piece_marker and not has_henzo_correction:
         return current
 
     code = latest_code_from_history(history)
     if not code:
         return current
+
+    if has_henzo_correction and not contains_marker_word(current, "NO HZ"):
+        code = add_code_marker(code, "HZ")
 
     if thickness:
         return f"Dame el despiece de {code} en {thickness} mm"
@@ -558,51 +625,21 @@ def contextual_question(question: str, history: list[dict] | None = None) -> str
     # BLOQUE 3: continuidad de conversacion.
     # Solo une historial cuando la pregunta actual parece seguimiento del mismo tema.
     original = str(question or "").strip()
-    current = confirmation_followup_question(original, history)
+    current = piece_breakdown_followup_question(original, history)
     if current != original:
         return current
-    current = piece_breakdown_followup_question(original, history)
+    current = confirmation_followup_question(original, history)
     if current != original:
         return current
     context = history_text(history)
     if not context:
         return current
     normalized = normalize_search_text(current)
-    followup_markers = {
-        "ese",
-        "esa",
-        "eso",
-        "este",
-        "esta",
-        "estos",
-        "estas",
-        "anterior",
-        "ultimo",
-        "ultima",
-        "tambien",
-        "igual",
-        "mismo",
-        "misma",
-        "video",
-        "imagen",
-        "link",
-        "enlace",
-        "documento",
-        "presentacion",
-        "medida",
-        "medidas",
-        "despiece",
-        "piezas",
-        "grosor",
-        "espesor",
-        "explica",
-        "explicame",
-        "detalla",
-        "continua",
-        "sigue",
-    }
+    if extract_module_code(current):
+        return current
+    followup_markers = FOLLOWUP_KEYWORDS | DESPIECE_KEYWORDS | {"detalla", "documento", "enlace", "explica", "explicame", "imagen", "link", "presentacion", "video"}
     current_tokens = set(normalized.split())
-    has_code = bool(extract_possible_code(current))
+    has_code = bool(extract_module_code(current) or extract_possible_code(current))
 
     if not current_tokens.intersection(followup_markers) and (has_code or len(current_tokens) > 4):
         return current
@@ -657,39 +694,18 @@ def retrieve_resource_links(question: str, top_k: int = 6) -> list[dict]:
 
 def wants_external_link(question: str) -> bool:
     tokens = set(normalize_search_text(question).split())
-    return bool(
-        tokens.intersection(
-            {
-                "enlace",
-                "enlaces",
-                "link",
-                "links",
-                "url",
-                "video",
-                "videos",
-                "imagen",
-                "imagenes",
-                "foto",
-                "fotos",
-                "presentacion",
-                "presentaciones",
-                "powerpoint",
-                "ppt",
-                "pptx",
-            }
-        )
-    )
+    return bool(tokens.intersection(LINK_KEYWORDS | {"imagen", "imagenes", "foto", "fotos"}))
 
 
 def wants_visual_answer(question: str) -> bool:
     tokens = set(normalize_search_text(question).split())
-    return bool(tokens.intersection({"acabado", "acabados", "color", "colores", "foto", "fotos", "imagen", "imagenes", "mostrar", "muestra", "muestrame", "ver"}))
+    return bool(tokens.intersection(VISUAL_KEYWORDS))
 
 
 def question_intent(question: str) -> str:
     normalized = normalize_search_text(question)
     tokens = set(normalized.split())
-    if any(token.startswith(("despiez", "despic", "despis", "despies")) for token in tokens) or tokens.intersection({"pieza", "piezas", "grosor", "espesor"}):
+    if any(token.startswith(("despiez", "despic", "despis", "despies")) for token in tokens) or tokens.intersection(DESPIECE_KEYWORDS):
         return "despiece"
     if wants_visual_answer(question):
         return "visual"
