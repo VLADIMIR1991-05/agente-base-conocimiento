@@ -57,8 +57,6 @@ DESPIECE_KEYWORDS = {
 FOLLOWUP_KEYWORDS = {
     "anterior",
     "continua",
-    "de",
-    "del",
     "ese",
     "esa",
     "eso",
@@ -66,11 +64,11 @@ FOLLOWUP_KEYWORDS = {
     "esta",
     "estos",
     "estas",
+    "hazlo",
+    "hacerlo",
     "igual",
-    "lo",
     "mismo",
     "misma",
-    "para",
     "sigue",
     "tambien",
     "ultimo",
@@ -637,7 +635,7 @@ def contextual_question(question: str, history: list[dict] | None = None) -> str
     normalized = normalize_search_text(current)
     if extract_module_code(current):
         return current
-    followup_markers = FOLLOWUP_KEYWORDS | DESPIECE_KEYWORDS | {"detalla", "documento", "enlace", "explica", "explicame", "imagen", "link", "presentacion", "video"}
+    followup_markers = FOLLOWUP_KEYWORDS | {"detalla", "explica", "explicame", "despiece", "despieza", "piezas", "medida", "medidas", "grosor", "espesor"}
     current_tokens = set(normalized.split())
     has_code = bool(extract_module_code(current) or extract_possible_code(current))
 
@@ -649,7 +647,7 @@ def contextual_question(question: str, history: list[dict] | None = None) -> str
     if meaningful_current and not meaningful_current.intersection(previous_tokens) and len(current_tokens) > 4:
         return current
 
-    if len(current_tokens) <= 8 or current_tokens.intersection(followup_markers):
+    if current_tokens.intersection(followup_markers):
         return f"{context}\nPregunta actual: {current}"
     return current
 
@@ -784,7 +782,9 @@ def retrieve_local(question: str, top_k: int = 8) -> list[dict]:
     if wants_visual_answer(question):
         matches = merge_matches(matches, retrieve_local_images(question, top_k=top_k), top_k=top_k * 2)
 
-    if tokens:
+    intent = question_intent(question)
+    should_search_codes = intent in {"code", "despiece", "general"} and not wants_visual_answer(question)
+    if tokens and should_search_codes:
         for code, description in VERIFICAR_DB.items():
             searchable = f"{code} {description}"
             score = score_text_match(tokens, searchable, title=code)
@@ -861,7 +861,7 @@ def collect_knowledge_matches(question: str, top_k: int = 22) -> list[dict]:
     # Despieces y codigos se resuelven rapido; consultas generales si recorren documentos.
     intent = question_intent(question)
     link_matches = retrieve_resource_links(question, top_k=max(8, top_k // 2))
-    verificar_matches = retrieve_verificar_matches(question, top_k=max(10, top_k // 2))
+    verificar_matches = retrieve_verificar_matches(question, top_k=max(10, top_k // 2)) if intent in {"code", "despiece", "general"} and not wants_visual_answer(question) else []
     image_matches = retrieve_local_images(question, top_k=max(8, top_k // 2)) if intent == "visual" else []
     index_matches = retrieve_index_if_ready(question, top_k=max(top_k, 12)) if intent == "general" else []
     sweep_matches = []
@@ -898,6 +898,17 @@ def generate_local_answer(question: str, matches: list[dict]) -> str:
     if not matches:
         return "No encuentro esa informacion en mi base de conocimiento."
 
+    image_matches = [match for match in matches if match.get("kind") == "local_image"]
+    if wants_visual_answer(question) and image_matches:
+        lines = ["Encontré estas opciones en la base de acabados:", ""]
+        lines.append("| Acabado | Archivo |")
+        lines.append("|---|---|")
+        for match in image_matches[:6]:
+            source = str(match.get("source", ""))
+            name = Path(source).stem.replace("_", " ").replace("-", " ").strip()
+            lines.append(f"| {name} | {Path(source).name} |")
+        return "\n".join(lines)
+
     link_matches = [match for match in matches if match.get("kind") == "resource_link"]
     if link_matches:
         lines = ["Encontré estos enlaces listos para abrir:", ""]
@@ -932,7 +943,6 @@ def generate_local_answer(question: str, matches: list[dict]) -> str:
             lines.append("No tengo una imagen asociada a esa busqueda en la base; solo encontre la referencia textual.")
         return "\n".join(lines)
 
-    image_matches = [match for match in matches if match.get("kind") == "local_image"]
     if image_matches:
         lines = ["Encontre estas imagenes en la base de acabados:", ""]
         lines.append("| Acabado | Archivo |")

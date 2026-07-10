@@ -31,6 +31,7 @@ ADMIN_USERS = {
     "USUARIO": {"CONTRASENA", "contrasena"},
 }
 ADMIN_SESSIONS: dict[str, dict] = {}
+USER_SESSIONS: dict[str, dict] = {}
 USER_ROLES = {"invitado", "super_usuario"}
 ROLE_LABELS = {
     "invitado": "Invitado",
@@ -38,6 +39,7 @@ ROLE_LABELS = {
 }
 ACTION_LABELS = {
     "user_login": "Ingreso al chat",
+    "user_logout": "Cierre de usuario",
     "admin_login": "Ingreso super usuario",
     "admin_logout": "Cierre super usuario",
     "user_save": "Usuario creado o actualizado",
@@ -479,6 +481,12 @@ PAGE = r"""<!doctype html>
       outline-color: var(--teal);
     }
 
+    textarea:disabled,
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
     .hint {
       margin-top: 12px;
       padding: 12px;
@@ -765,8 +773,10 @@ PAGE = r"""<!doctype html>
     const downloadReportPdfBtn = document.querySelector("#downloadReportPdfBtn");
     const askForm = document.querySelector("#askForm");
     const questionEl = document.querySelector("#question");
+    const sendBtn = askForm.querySelector("button[type='submit']");
     let adminToken = sessionStorage.getItem("kb_admin_token") || "";
     let activeUserName = localStorage.getItem("kb_user_name") || "";
+    let userToken = localStorage.getItem("kb_user_token") || "";
 
     function icons() {
       if (window.lucide) window.lucide.createIcons();
@@ -1142,6 +1152,12 @@ PAGE = r"""<!doctype html>
       return activeUserName.trim();
     }
 
+    function setChatLocked(locked) {
+      questionEl.disabled = locked;
+      sendBtn.disabled = locked;
+      questionEl.placeholder = locked ? "Ingresa con tu usuario para continuar." : "Escribe tu requerimiento.";
+    }
+
     function padTimePart(value) {
       return String(value).padStart(2, "0");
     }
@@ -1181,6 +1197,14 @@ PAGE = r"""<!doctype html>
     }
 
     async function logoutUser() {
+      const tokenForUser = userToken;
+      if (tokenForUser) {
+        await fetch("/api/user/logout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: tokenForUser, ...browserLocalMeta() })
+        }).catch(() => {});
+      }
       if (adminToken) {
         await fetch("/api/admin/logout", {
           method: "POST",
@@ -1190,21 +1214,25 @@ PAGE = r"""<!doctype html>
       }
       adminToken = "";
       activeUserName = "";
+      userToken = "";
       sessionStorage.removeItem("kb_admin_token");
       localStorage.removeItem("kb_user_name");
+      localStorage.removeItem("kb_user_token");
       adminPanel.classList.remove("active");
       adminLogin.classList.remove("active");
       gateNameEl.value = "";
       gatePasswordEl.value = "";
       gateMessageEl.textContent = "";
       nameGate.classList.add("active");
+      setChatLocked(true);
       setTimeout(() => gateNameEl.focus(), 50);
     }
 
     updateLocalClock();
     setInterval(updateLocalClock, 30000);
     gateNameEl.value = activeUserName;
-    if (!activeUserName) {
+    setChatLocked(!activeUserName || !userToken);
+    if (!activeUserName || !userToken) {
       nameGate.classList.add("active");
       setTimeout(() => gateNameEl.focus(), 50);
     }
@@ -1267,10 +1295,13 @@ PAGE = r"""<!doctype html>
         return;
       }
       activeUserName = data.username || name;
+      userToken = data.token || "";
       localStorage.setItem("kb_user_name", activeUserName);
+      localStorage.setItem("kb_user_token", userToken);
       gatePasswordEl.value = "";
       gateMessageEl.textContent = "";
       nameGate.classList.remove("active");
+      setChatLocked(false);
       addAssistantMessage(randomGreeting(activeUserName));
       questionEl.focus();
     }
@@ -1357,7 +1388,8 @@ PAGE = r"""<!doctype html>
       const question = questionEl.value.trim();
       if (!question) return;
       const userName = currentUserName();
-      if (!userName) {
+      if (!userName || !userToken) {
+        setChatLocked(true);
         nameGate.classList.add("active");
         gateNameEl.focus();
         return;
@@ -1368,10 +1400,15 @@ PAGE = r"""<!doctype html>
       const response = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, user_name: userName, ...browserLocalMeta() })
+        body: JSON.stringify({ question, user_name: userName, token: userToken, ...browserLocalMeta() })
       });
       const data = await response.json();
       waiting.remove();
+      if (!response.ok && response.status === 401) {
+        addAssistantMessage(data.message || "Tu sesion expiro. Ingresa nuevamente.");
+        await logoutUser();
+        return;
+      }
       addAssistantMessage(data.answer || data.message, data.images || [], data.interaction_id || null);
       if (adminPanel.classList.contains("active")) await refreshReport();
     });
@@ -2253,6 +2290,18 @@ def current_session(handler: BaseHTTPRequestHandler) -> dict:
     return {"username": user["username"], "role": user["role"], "active": bool(user["active"])}
 
 
+def current_user_session(token: str) -> dict:
+    session = USER_SESSIONS.get(str(token or "").strip(), {}) if token else {}
+    username = session.get("username")
+    if not username:
+        return {}
+    user = get_app_user(str(username))
+    if not user or not user["active"]:
+        USER_SESSIONS.pop(str(token or "").strip(), None)
+        return {}
+    return {"username": user["username"], "role": user["role"], "active": bool(user["active"])}
+
+
 def is_super_admin_request(handler: BaseHTTPRequestHandler) -> bool:
     session = current_session(handler)
     return bool(session.get("active")) and session.get("role") == "super_usuario"
@@ -2447,6 +2496,9 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.path == "/api/user/login":
             self.handle_user_login()
             return
+        if self.path == "/api/user/logout":
+            self.handle_user_logout()
+            return
         if self.path == "/api/admin/login":
             self.handle_admin_login()
             return
@@ -2484,6 +2536,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if client_timezone:
             detail += f"; zona: {client_timezone}"
         log_audit_event(user["username"], "user_login", user["username"], detail, event_time=event_time)
+        token = secrets.token_urlsafe(32)
+        USER_SESSIONS[token] = {"username": user["username"], "role": user["role"], "active": bool(user["active"])}
         json_response(
             self,
             {
@@ -2491,8 +2545,24 @@ class AppHandler(BaseHTTPRequestHandler):
                 "username": user["username"],
                 "role": user["role"],
                 "role_label": ROLE_LABELS.get(user["role"], "Invitado"),
+                "token": token,
             },
         )
+
+    def handle_user_logout(self) -> None:
+        payload = read_json_body(self)
+        event_time = client_now(payload)
+        client_timezone = str(payload.get("client_timezone", "")).strip()
+        token = str(payload.get("token", "")).strip()
+        session = current_user_session(token)
+        if token:
+            USER_SESSIONS.pop(token, None)
+        if session.get("username"):
+            detail = "Cierre de sesion del usuario"
+            if client_timezone:
+                detail += f"; zona: {client_timezone}"
+            log_audit_event(session["username"], "user_logout", session["username"], detail, event_time=event_time)
+        json_response(self, {"ok": True})
 
     def handle_admin_login(self) -> None:
         payload = read_json_body(self)
@@ -2587,10 +2657,12 @@ class AppHandler(BaseHTTPRequestHandler):
         payload = read_json_body(self)
         event_time = client_now(payload)
         question = str(payload.get("question", "")).strip()
-        user_name = str(payload.get("user_name", "")).strip()
-        if not user_name:
-            json_response(self, {"ok": False, "message": "Ingresa tu nombre para iniciar."}, status=400)
+        token = str(payload.get("token", "")).strip()
+        session = current_user_session(token)
+        if not session.get("username"):
+            json_response(self, {"ok": False, "message": "Sesion no valida. Ingresa nuevamente."}, status=401)
             return
+        user_name = str(session["username"]).strip()
         if not question:
             json_response(self, {"ok": False, "message": "Escribe una pregunta."}, status=400)
             return
