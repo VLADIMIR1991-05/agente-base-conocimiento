@@ -11,14 +11,10 @@ import secrets
 import sqlite3
 import threading
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    ZoneInfo = None
 
 from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question_with_sources, build_index
 
@@ -34,7 +30,6 @@ ADMIN_USERS = {
     "USUARIO": {"CONTRASENA", "contrasena"},
 }
 ADMIN_SESSIONS: dict[str, dict] = {}
-ECUADOR_TZ = ZoneInfo("America/Guayaquil") if ZoneInfo else timezone(timedelta(hours=-5))
 USER_ROLES = {"invitado", "super_usuario"}
 ROLE_LABELS = {
     "invitado": "Invitado",
@@ -874,7 +869,7 @@ PAGE = r"""<!doctype html>
       const response = await fetch("/api/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interaction_id: interactionId, rating })
+        body: JSON.stringify({ interaction_id: interactionId, rating, ...browserLocalMeta() })
       });
       const data = await response.json();
       status.textContent = data.ok ? "Gracias, calificacion guardada." : (data.message || "No se pudo guardar.");
@@ -1094,7 +1089,8 @@ PAGE = r"""<!doctype html>
           username: managedUsernameEl.value.trim(),
           password: managedPasswordEl.value,
           role: managedRoleEl.value,
-          active: managedActiveEl.value === "1"
+          active: managedActiveEl.value === "1",
+          ...browserLocalMeta()
         })
       });
       const data = await response.json();
@@ -1109,10 +1105,29 @@ PAGE = r"""<!doctype html>
       return activeUserName.trim();
     }
 
+    function padTimePart(value) {
+      return String(value).padStart(2, "0");
+    }
+
+    function browserLocalMeta() {
+      const now = new Date();
+      return {
+        client_timestamp: [
+          now.getFullYear(),
+          padTimePart(now.getMonth() + 1),
+          padTimePart(now.getDate())
+        ].join("-") + "T" + [
+          padTimePart(now.getHours()),
+          padTimePart(now.getMinutes()),
+          padTimePart(now.getSeconds())
+        ].join(":"),
+        client_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || ""
+      };
+    }
+
     function updateLocalClock() {
       const now = new Date();
       const dateParts = new Intl.DateTimeFormat("es-EC", {
-        timeZone: "America/Guayaquil",
         day: "numeric",
         month: "numeric",
         year: "numeric"
@@ -1121,7 +1136,6 @@ PAGE = r"""<!doctype html>
         return acc;
       }, {});
       const timeText = new Intl.DateTimeFormat("es-EC", {
-        timeZone: "America/Guayaquil",
         hour: "2-digit",
         minute: "2-digit",
         hour12: false
@@ -1133,7 +1147,8 @@ PAGE = r"""<!doctype html>
       if (adminToken) {
         await fetch("/api/admin/logout", {
           method: "POST",
-          headers: { Authorization: `Bearer ${adminToken}` }
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+          body: JSON.stringify(browserLocalMeta())
         }).catch(() => {});
       }
       adminToken = "";
@@ -1207,7 +1222,7 @@ PAGE = r"""<!doctype html>
       const response = await fetch("/api/user/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: name, password: gatePasswordEl.value })
+        body: JSON.stringify({ username: name, password: gatePasswordEl.value, ...browserLocalMeta() })
       });
       const data = await response.json();
       if (!data.ok) {
@@ -1253,7 +1268,8 @@ PAGE = r"""<!doctype html>
       if (token) {
         fetch("/api/admin/logout", {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(browserLocalMeta())
         }).catch(() => {});
       }
     }
@@ -1266,7 +1282,7 @@ PAGE = r"""<!doctype html>
       const response = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: adminUserEl.value.trim(), password: adminPasswordEl.value })
+        body: JSON.stringify({ username: adminUserEl.value.trim(), password: adminPasswordEl.value, ...browserLocalMeta() })
       });
       const data = await response.json();
       if (!data.ok) {
@@ -1315,7 +1331,7 @@ PAGE = r"""<!doctype html>
       const response = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, user_name: userName })
+        body: JSON.stringify({ question, user_name: userName, ...browserLocalMeta() })
       });
       const data = await response.json();
       waiting.remove();
@@ -1358,7 +1374,20 @@ def page_response(handler: BaseHTTPRequestHandler) -> None:
 
 
 def local_now() -> datetime:
-    return datetime.now(ECUADOR_TZ).replace(tzinfo=None)
+    return datetime.now().replace(tzinfo=None)
+
+
+def client_now(payload: dict | None = None) -> datetime:
+    if not payload:
+        return local_now()
+    raw = str(payload.get("client_timestamp", "")).strip()[:32]
+    if not raw:
+        return local_now()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return local_now()
+    return parsed.replace(tzinfo=None)
 
 
 def hash_password(password: str, salt: str = "") -> str:
@@ -1496,12 +1525,12 @@ def legacy_admin_password_ok(username: str, password: str) -> bool:
     return password in candidates or normalized_password in normalized_candidates
 
 
-def upsert_app_user(username: str, password: str = "", role: str = "invitado", active: bool = True) -> dict:
+def upsert_app_user(username: str, password: str = "", role: str = "invitado", active: bool = True, event_time: datetime | None = None) -> dict:
     clean_username = str(username or "").strip()
     if not clean_username:
         raise UserFacingError("Ingresa un nombre de usuario.")
     clean_role = normalize_role(role)
-    now = local_now().isoformat(timespec="seconds")
+    now = (event_time or local_now()).isoformat(timespec="seconds")
     existing = get_app_user(clean_username)
     if existing is None and not password:
         raise UserFacingError("Ingresa una contrasena para el usuario nuevo.")
@@ -1536,9 +1565,9 @@ def upsert_app_user(username: str, password: str = "", role: str = "invitado", a
     return get_app_user(clean_username) or {}
 
 
-def log_audit_event(actor: str, action: str, target_user: str = "", detail: str = "") -> None:
+def log_audit_event(actor: str, action: str, target_user: str = "", detail: str = "", event_time: datetime | None = None) -> None:
     init_db()
-    now = local_now()
+    now = event_time or local_now()
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute(
             """
@@ -1577,9 +1606,9 @@ def recent_audit_events(limit: int = 30) -> list[dict]:
     return result
 
 
-def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict]) -> int:
+def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict], event_time: datetime | None = None) -> int:
     init_db()
-    now = local_now()
+    now = event_time or local_now()
     source_names = [str(source.get("source", "")) for source in sources if source.get("source")]
     created_at = now.isoformat(timespec="seconds")
     date_text = now.date().isoformat()
@@ -1638,10 +1667,10 @@ def append_txt_report(
         report.write("\n".join(block))
 
 
-def save_rating(interaction_id: int, rating: int, note: str = "") -> bool:
+def save_rating(interaction_id: int, rating: int, note: str = "", event_time: datetime | None = None) -> bool:
     init_db()
     rating = max(1, min(5, int(rating)))
-    rated_at = local_now().isoformat(timespec="seconds")
+    rated_at = (event_time or local_now()).isoformat(timespec="seconds")
     with sqlite3.connect(DB_PATH) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
@@ -2334,16 +2363,21 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def handle_user_login(self) -> None:
         payload = read_json_body(self)
+        event_time = client_now(payload)
+        client_timezone = str(payload.get("client_timezone", "")).strip()
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", ""))
         user = get_app_user(username)
         if user and not verify_password(password, user["password_hash"]) and legacy_admin_password_ok(user["username"], password):
-            upsert_app_user(user["username"], password=password, role=user["role"], active=bool(user["active"]))
+            upsert_app_user(user["username"], password=password, role=user["role"], active=bool(user["active"]), event_time=event_time)
             user = get_app_user(username)
         if not user or not user["active"] or not verify_password(password, user["password_hash"]):
             json_response(self, {"ok": False, "message": "Usuario o contrasena incorrectos."}, status=401)
             return
-        log_audit_event(user["username"], "user_login", user["username"], ROLE_LABELS.get(user["role"], user["role"]))
+        detail = ROLE_LABELS.get(user["role"], user["role"])
+        if client_timezone:
+            detail += f"; zona: {client_timezone}"
+        log_audit_event(user["username"], "user_login", user["username"], detail, event_time=event_time)
         json_response(
             self,
             {
@@ -2356,11 +2390,13 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def handle_admin_login(self) -> None:
         payload = read_json_body(self)
+        event_time = client_now(payload)
+        client_timezone = str(payload.get("client_timezone", "")).strip()
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", ""))
         user = get_app_user(username)
         if user and not verify_password(password, user["password_hash"]) and legacy_admin_password_ok(user["username"], password):
-            upsert_app_user(user["username"], password=password, role=user["role"], active=bool(user["active"]))
+            upsert_app_user(user["username"], password=password, role=user["role"], active=bool(user["active"]), event_time=event_time)
             user = get_app_user(username)
         if not user or not user["active"] or not verify_password(password, user["password_hash"]):
             json_response(self, {"ok": False, "message": "Usuario o contrasena incorrectos."}, status=401)
@@ -2370,16 +2406,25 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         token = secrets.token_urlsafe(32)
         ADMIN_SESSIONS[token] = {"username": user["username"], "role": user["role"], "active": bool(user["active"])}
-        log_audit_event(user["username"], "admin_login", user["username"], "Ingreso al panel de super usuario")
+        detail = "Ingreso al panel de super usuario"
+        if client_timezone:
+            detail += f"; zona: {client_timezone}"
+        log_audit_event(user["username"], "admin_login", user["username"], detail, event_time=event_time)
         json_response(self, {"ok": True, "token": token, "role": user["role"], "username": user["username"]})
 
     def handle_admin_logout(self) -> None:
+        payload = read_json_body(self)
+        event_time = client_now(payload)
+        client_timezone = str(payload.get("client_timezone", "")).strip()
         token = admin_token_from(self)
         session = current_session(self)
         if token:
             ADMIN_SESSIONS.pop(token, None)
         if session.get("username"):
-            log_audit_event(session["username"], "admin_logout", session["username"], "Cierre del panel de super usuario")
+            detail = "Cierre del panel de super usuario"
+            if client_timezone:
+                detail += f"; zona: {client_timezone}"
+            log_audit_event(session["username"], "admin_logout", session["username"], detail, event_time=event_time)
         json_response(self, {"ok": True})
 
     def handle_admin_user_save(self) -> None:
@@ -2387,6 +2432,8 @@ class AppHandler(BaseHTTPRequestHandler):
             json_response(self, {"ok": False, "message": "Acceso restringido."}, status=403)
             return
         payload = read_json_body(self)
+        event_time = client_now(payload)
+        client_timezone = str(payload.get("client_timezone", "")).strip()
         session = current_session(self)
         try:
             user = upsert_app_user(
@@ -2394,14 +2441,17 @@ class AppHandler(BaseHTTPRequestHandler):
                 password=str(payload.get("password", "")),
                 role=str(payload.get("role", "invitado")),
                 active=parse_active_flag(payload.get("active", True)),
+                event_time=event_time,
             )
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=400)
             return
         detail = f"Rol: {ROLE_LABELS.get(user.get('role'), user.get('role'))}; estado: {'activo' if user.get('active') else 'desactivado'}"
         if str(payload.get("password", "")):
-            detail += "; contraseña actualizada"
-        log_audit_event(session.get("username", "super_usuario"), "user_save", str(user.get("username", "")), detail)
+            detail += "; contrasena actualizada"
+        if client_timezone:
+            detail += f"; zona: {client_timezone}"
+        log_audit_event(session.get("username", "super_usuario"), "user_save", str(user.get("username", "")), detail, event_time=event_time)
         json_response(
             self,
             {
@@ -2413,6 +2463,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 },
             },
         )
+
     def handle_ingest(self) -> None:
         try:
             fingerprint = knowledge_fingerprint()
@@ -2428,6 +2479,7 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def handle_ask(self) -> None:
         payload = read_json_body(self)
+        event_time = client_now(payload)
         question = str(payload.get("question", "")).strip()
         user_name = str(payload.get("user_name", "")).strip()
         if not user_name:
@@ -2470,11 +2522,12 @@ class AppHandler(BaseHTTPRequestHandler):
         ]
         images = matched_images or image_candidates
         images = images[:4]
-        interaction_id = log_interaction(user_name, question, result["answer"], result["sources"], images)
+        interaction_id = log_interaction(user_name, question, result["answer"], result["sources"], images, event_time=event_time)
         json_response(self, {"ok": True, "answer": result["answer"], "images": images, "interaction_id": interaction_id})
 
     def handle_rate(self) -> None:
         payload = read_json_body(self)
+        event_time = client_now(payload)
         try:
             interaction_id = int(payload.get("interaction_id", 0))
             rating = int(payload.get("rating", 0))
@@ -2485,7 +2538,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if interaction_id <= 0 or rating < 1 or rating > 5:
             json_response(self, {"ok": False, "message": "Calificacion invalida."}, status=400)
             return
-        if not save_rating(interaction_id, rating, note):
+        if not save_rating(interaction_id, rating, note, event_time=event_time):
             json_response(self, {"ok": False, "message": "No encontre la respuesta a calificar."}, status=404)
             return
         json_response(self, {"ok": True})
