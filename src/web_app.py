@@ -17,16 +17,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from rag_core import DATA_DIR, IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question_with_sources, build_index
+from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question_with_sources, build_index
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".xlsx", ".pptx", ".pdf", ".json"} | IMAGE_FILE_TYPES
-DB_PATH = Path(os.getenv("APP_DB_PATH", str(DATA_DIR / "usage_log.db"))).expanduser()
-INDEX_META_PATH = Path(os.getenv("APP_INDEX_META_PATH", str(DATA_DIR / "index_meta.json"))).expanduser()
-TXT_REPORT_DIR = Path(os.getenv("APP_REPORT_DIR", str(ROOT / "informes_txt"))).expanduser()
+DB_PATH = ROOT / "data" / "usage_log.db"
+INDEX_META_PATH = ROOT / "data" / "index_meta.json"
+TXT_REPORT_DIR = ROOT / "informes_txt"
 ASSETS_DIR = ROOT / "assets"
-USERS_FILE_PATH = Path(os.getenv("APP_USERS_FILE", str(KNOWLEDGE_DIR / "usuarios.txt"))).expanduser()
+USERS_FILE_PATH = Path(os.getenv("APP_USERS_FILE", str(ROOT / "knowledge_base" / "usuarios.txt")))
 INDEX_BUILD_STATE = {"running": False}
 ADMIN_USERS = {
     "USUARIO": {"CONTRASENA", "contrasena"},
@@ -2708,7 +2708,7 @@ def index_is_current(fingerprint: dict) -> bool:
 
 
 def write_index_metadata(index: dict, fingerprint: dict) -> None:
-    INDEX_META_PATH.parent.mkdir(parents=True, exist_ok=True)
+    INDEX_META_PATH.parent.mkdir(exist_ok=True)
     payload = {
         **fingerprint,
         "chunks": len(index.get("chunks", [])),

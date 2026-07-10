@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -9,14 +8,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(ROOT / ".env", encoding="utf-8-sig")
-except ModuleNotFoundError:
-    pass
-
-KNOWLEDGE_DIR = Path(os.getenv("APP_KNOWLEDGE_DIR", str(ROOT / "knowledge_base"))).expanduser()
+KNOWLEDGE_DIR = ROOT / "knowledge_base"
 
 
 @dataclass

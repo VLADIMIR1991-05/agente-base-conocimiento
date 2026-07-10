@@ -71,23 +71,3 @@ Estado:
 - `activo: 0` bloquea el usuario.
 
 Si el mismo usuario existe en `usuarios.txt` y en la base local, manda lo que diga `usuarios.txt`.
-
-## Usar carpeta sincronizada en OneDrive
-
-Para que los cambios se manejen desde una carpeta sincronizada, configura estas variables en `.env` o en Render:
-
-```env
-APP_KNOWLEDGE_DIR=C:\Users\TuUsuario\OneDrive\MADEVAL\knowledge_base
-APP_USERS_FILE=C:\Users\TuUsuario\OneDrive\MADEVAL\usuarios.txt
-APP_DATA_DIR=C:\Users\TuUsuario\OneDrive\MADEVAL\data
-APP_REPORT_DIR=C:\Users\TuUsuario\OneDrive\MADEVAL\informes_txt
-```
-
-Uso recomendado:
-
-- `APP_KNOWLEDGE_DIR`: carpeta donde estan documentos, imagenes, colores, codigos y reglas.
-- `APP_USERS_FILE`: archivo editable de usuarios.
-- `APP_DATA_DIR`: conversaciones, indice y base interna.
-- `APP_REPORT_DIR`: reportes TXT diarios.
-
-Los enlaces web de SharePoint sirven para abrir la nube en el navegador, pero la app necesita una ruta de archivo sincronizada o una integracion Microsoft Graph para leer y escribir directamente en SharePoint.

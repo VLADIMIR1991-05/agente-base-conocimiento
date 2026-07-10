@@ -15,20 +15,8 @@ from verificar_knowledge import answer_verificar_question, dimensions_from_code,
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_settings() -> None:
-    try:
-        from dotenv import load_dotenv
-    except ModuleNotFoundError:
-        return
-    load_dotenv(ROOT / ".env", encoding="utf-8-sig")
-
-
-load_settings()
-
-KNOWLEDGE_DIR = Path(os.getenv("APP_KNOWLEDGE_DIR", str(ROOT / "knowledge_base"))).expanduser()
-DATA_DIR = Path(os.getenv("APP_DATA_DIR", str(ROOT / "data"))).expanduser()
+KNOWLEDGE_DIR = ROOT / "knowledge_base"
+DATA_DIR = ROOT / "data"
 INDEX_PATH = DATA_DIR / "index.json"
 LINKS_DIR = KNOWLEDGE_DIR / "links"
 
@@ -112,14 +100,12 @@ class TextDocument:
     text: str
 
 
-def knowledge_source_path(path: Path) -> str:
+def load_settings() -> None:
     try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        try:
-            return "knowledge_base/" + str(path.relative_to(KNOWLEDGE_DIR)).replace("\\", "/")
-        except ValueError:
-            return str(path)
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv(ROOT / ".env", encoding="utf-8-sig")
 
 
 def get_client():
@@ -262,7 +248,7 @@ def load_local_documents() -> tuple[TextDocument, ...]:
             text = ""
 
         if text.strip():
-            documents.append(TextDocument(source=knowledge_source_path(path), text=text))
+            documents.append(TextDocument(source=str(path.relative_to(ROOT)), text=text))
     return tuple(documents)
 
 
@@ -309,7 +295,7 @@ def load_resource_links() -> list[dict]:
                 continue
             resources.append(
                 {
-                    "source": knowledge_source_path(path),
+                    "source": str(path.relative_to(ROOT)),
                     "kind": str(item.get("kind") or payload.get("kind") or path.stem).strip(),
                     "title": str(item.get("title", "")).strip(),
                     "description": str(item.get("description", "")).strip(),
@@ -365,7 +351,7 @@ def build_index() -> dict:
     for chunk, embedding in zip(chunks, embeddings):
         chunk["embedding"] = embedding
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(exist_ok=True)
     payload = {"chunks": chunks}
     INDEX_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
@@ -739,7 +725,7 @@ def retrieve_local_images(question: str, top_k: int = 6) -> list[dict]:
     for path in image_paths:
         if not path.is_file() or path.suffix.lower() not in IMAGE_FILE_TYPES:
             continue
-        source = knowledge_source_path(path)
+        source = str(path.relative_to(ROOT))
         text = read_image(path)
         searchable = f"{source} {text}"
         score = score_text_match(tokens, searchable, title=path.stem)
