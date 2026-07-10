@@ -10,6 +10,7 @@ Esta carpeta esta organizada para crecer sin mezclar informacion ni gastar token
 - `documentos/`: documentos por formato para crear indice RAG cuando haga falta.
 - `codigo/`: fragmentos, reglas tecnicas o notas de implementacion que no pertenecen a `VERIFICAR`.
 - `urls.txt`: paginas web que se indexan como texto cuando se crea el indice.
+- `usuarios.txt`: archivo opcional para administrar usuarios desde una carpeta sincronizada, por ejemplo OneDrive.
 
 ## Regla practica
 
@@ -34,3 +35,39 @@ El agente debe:
 - evitar inventar informacion que no este en la base o en las reglas.
 
 La guia completa esta en `../COMPORTAMIENTO_AGENTE.md`.
+
+## Usuarios desde TXT / OneDrive
+
+Puedes manejar usuarios con un archivo `usuarios.txt`. Por defecto el agente lo busca en:
+
+`knowledge_base/usuarios.txt`
+
+Si quieres usar una ruta sincronizada por OneDrive, configura la variable `APP_USERS_FILE` con la ruta completa del archivo. Ejemplo:
+
+`APP_USERS_FILE=C:\Users\TuUsuario\OneDrive\MADEVAL\usuarios.txt`
+
+Formato recomendado:
+
+```txt
+usuario: vlad
+contrasena: 1234
+tipo: 1
+activo: 1
+
+usuario: invitado1
+contrasena: 1234
+tipo: 2
+activo: 1
+```
+
+Tipos:
+
+- `1` = super usuario.
+- `2` = invitado.
+
+Estado:
+
+- `activo: 1` permite ingresar.
+- `activo: 0` bloquea el usuario.
+
+Si el mismo usuario existe en `usuarios.txt` y en la base local, manda lo que diga `usuarios.txt`.
