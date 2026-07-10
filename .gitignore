@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 work/
 data/index.json
+data/*.db
+data/*.db-*
 data/usage_log.db
 data/usage_log.db-*
 informes_txt/*
