@@ -11,10 +11,14 @@ import secrets
 import sqlite3
 import threading
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 
 from rag_core import IMAGE_FILE_TYPES, INDEX_PATH, KNOWLEDGE_DIR, UserFacingError, answer_question_with_sources, build_index
 
@@ -27,9 +31,10 @@ TXT_REPORT_DIR = ROOT / "informes_txt"
 ASSETS_DIR = ROOT / "assets"
 INDEX_BUILD_STATE = {"running": False}
 ADMIN_USERS = {
-    "USUARIO": {"CONTRASEÑA", "contraseña", "CONTRASENA", "contrasena"},
+    "USUARIO": {"CONTRASENA", "contrasena"},
 }
 ADMIN_SESSIONS: dict[str, dict] = {}
+ECUADOR_TZ = ZoneInfo("America/Guayaquil") if ZoneInfo else timezone(timedelta(hours=-5))
 USER_ROLES = {"invitado", "super_usuario"}
 ROLE_LABELS = {
     "invitado": "Invitado",
@@ -108,6 +113,22 @@ PAGE = r"""<!doctype html>
       align-items: center;
       gap: 12px;
       min-width: 0;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .local-clock {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      white-space: nowrap;
     }
 
     .mark {
@@ -560,7 +581,11 @@ PAGE = r"""<!doctype html>
         </div>
         <p class="subtitle">Consulta la informacion de la empresa con una experiencia clara y rapida.</p>
       </div>
-      <button class="icon-button" type="button" id="adminOpen" title="Super usuario"><i data-lucide="settings"></i></button>
+      <div class="top-actions">
+        <div class="local-clock" id="localClock"></div>
+        <button class="secondary" type="button" id="logoutUserBtn"><i data-lucide="log-out"></i>Cerrar usuario</button>
+        <button class="icon-button" type="button" id="adminOpen" title="Super usuario"><i data-lucide="settings"></i></button>
+      </div>
     </section>
 
     <section class="grid">
@@ -711,6 +736,8 @@ PAGE = r"""<!doctype html>
     const gatePasswordEl = document.querySelector("#gatePassword");
     const gateMessageEl = document.querySelector("#gateMessage");
     const saveNameBtn = document.querySelector("#saveNameBtn");
+    const localClockEl = document.querySelector("#localClock");
+    const logoutUserBtn = document.querySelector("#logoutUserBtn");
     const adminOpen = document.querySelector("#adminOpen");
     const adminLogin = document.querySelector("#adminLogin");
     const adminLoginClose = document.querySelector("#adminLoginClose");
@@ -1082,9 +1109,53 @@ PAGE = r"""<!doctype html>
       return activeUserName.trim();
     }
 
+    function updateLocalClock() {
+      const now = new Date();
+      const dateParts = new Intl.DateTimeFormat("es-EC", {
+        timeZone: "America/Guayaquil",
+        day: "numeric",
+        month: "numeric",
+        year: "numeric"
+      }).formatToParts(now).reduce((acc, part) => {
+        acc[part.type] = part.value;
+        return acc;
+      }, {});
+      const timeText = new Intl.DateTimeFormat("es-EC", {
+        timeZone: "America/Guayaquil",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      }).format(now);
+      localClockEl.textContent = `${dateParts.day}/${dateParts.month}/${dateParts.year} ${timeText}`;
+    }
+
+    async function logoutUser() {
+      if (adminToken) {
+        await fetch("/api/admin/logout", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${adminToken}` }
+        }).catch(() => {});
+      }
+      adminToken = "";
+      activeUserName = "";
+      sessionStorage.removeItem("kb_admin_token");
+      localStorage.removeItem("kb_user_name");
+      adminPanel.classList.remove("active");
+      adminLogin.classList.remove("active");
+      gateNameEl.value = "";
+      gatePasswordEl.value = "";
+      gateMessageEl.textContent = "";
+      nameGate.classList.add("active");
+      setTimeout(() => gateNameEl.focus(), 50);
+    }
+
+    updateLocalClock();
+    setInterval(updateLocalClock, 30000);
     gateNameEl.value = activeUserName;
-    nameGate.classList.add("active");
-    setTimeout(() => gateNameEl.focus(), 50);
+    if (!activeUserName) {
+      nameGate.classList.add("active");
+      setTimeout(() => gateNameEl.focus(), 50);
+    }
 
     function randomGreeting(name) {
       const greetings = [
@@ -1159,6 +1230,7 @@ PAGE = r"""<!doctype html>
     gatePasswordEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter") saveUserName();
     });
+    logoutUserBtn.addEventListener("click", logoutUser);
 
     adminOpen.addEventListener("click", () => {
       if (adminToken) {
@@ -1285,6 +1357,10 @@ def page_response(handler: BaseHTTPRequestHandler) -> None:
     handler.wfile.write(body)
 
 
+def local_now() -> datetime:
+    return datetime.now(ECUADOR_TZ).replace(tzinfo=None)
+
+
 def hash_password(password: str, salt: str = "") -> str:
     salt = salt or secrets.token_hex(16)
     digest = hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
@@ -1367,7 +1443,7 @@ def init_db() -> None:
             str(row[0]).upper()
             for row in connection.execute("SELECT username FROM app_users").fetchall()
         }
-        now = datetime.now().isoformat(timespec="seconds")
+        now = local_now().isoformat(timespec="seconds")
         for username, passwords in ADMIN_USERS.items():
             if username.upper() in existing_users:
                 continue
@@ -1425,7 +1501,7 @@ def upsert_app_user(username: str, password: str = "", role: str = "invitado", a
     if not clean_username:
         raise UserFacingError("Ingresa un nombre de usuario.")
     clean_role = normalize_role(role)
-    now = datetime.now().isoformat(timespec="seconds")
+    now = local_now().isoformat(timespec="seconds")
     existing = get_app_user(clean_username)
     if existing is None and not password:
         raise UserFacingError("Ingresa una contrasena para el usuario nuevo.")
@@ -1462,7 +1538,7 @@ def upsert_app_user(username: str, password: str = "", role: str = "invitado", a
 
 def log_audit_event(actor: str, action: str, target_user: str = "", detail: str = "") -> None:
     init_db()
-    now = datetime.now()
+    now = local_now()
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute(
             """
@@ -1503,7 +1579,7 @@ def recent_audit_events(limit: int = 30) -> list[dict]:
 
 def log_interaction(user_name: str, question: str, answer: str, sources: list[dict], images: list[dict]) -> int:
     init_db()
-    now = datetime.now()
+    now = local_now()
     source_names = [str(source.get("source", "")) for source in sources if source.get("source")]
     created_at = now.isoformat(timespec="seconds")
     date_text = now.date().isoformat()
@@ -1565,7 +1641,7 @@ def append_txt_report(
 def save_rating(interaction_id: int, rating: int, note: str = "") -> bool:
     init_db()
     rating = max(1, min(5, int(rating)))
-    rated_at = datetime.now().isoformat(timespec="seconds")
+    rated_at = local_now().isoformat(timespec="seconds")
     with sqlite3.connect(DB_PATH) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
@@ -1912,7 +1988,7 @@ def wrap_pdf_text(text: str, width: int = 95, max_lines: int = 6) -> list[str]:
 
 def create_report_pdf(start_date: str = "", end_date: str = "", user_name: str = "") -> bytes:
     rows = all_interactions(start_date=start_date, end_date=end_date, user_name=user_name)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = local_now().strftime("%Y-%m-%d %H:%M")
     pages: list[list[str]] = []
     current: list[str] = []
     y = 800
@@ -2103,7 +2179,7 @@ def write_index_metadata(index: dict, fingerprint: dict) -> None:
     payload = {
         **fingerprint,
         "chunks": len(index.get("chunks", [])),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": local_now().isoformat(timespec="seconds"),
     }
     INDEX_META_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -2174,7 +2250,7 @@ class AppHandler(BaseHTTPRequestHandler):
         except UserFacingError as error:
             json_response(self, {"ok": False, "message": str(error)}, status=500)
             return
-        filename = f"reporte_consultas_{datetime.now().date().isoformat()}.xlsx"
+        filename = f"reporte_consultas_{local_now().date().isoformat()}.xlsx"
         self.send_response(200)
         self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
@@ -2188,7 +2264,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         start_date, end_date, user_name = report_filters_from_path(self.path)
         body = create_report_pdf(start_date=start_date, end_date=end_date, user_name=user_name)
-        filename = f"reporte_consultas_{datetime.now().date().isoformat()}.pdf"
+        filename = f"reporte_consultas_{local_now().date().isoformat()}.pdf"
         self.send_response(200)
         self.send_header("Content-Type", "application/pdf")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
