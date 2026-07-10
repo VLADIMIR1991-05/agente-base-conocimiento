@@ -1,0 +1,20 @@
+# Copia este archivo como usuarios.txt y editalo desde OneDrive o desde esta carpeta.
+# Si usas OneDrive en Render/servidor, configura la variable APP_USERS_FILE con la ruta completa.
+#
+# tipo:
+# 1 = super usuario
+# 2 = invitado
+#
+# activo:
+# 1 = puede ingresar
+# 0 = bloqueado
+
+usuario: vlad
+contrasena: 1234
+tipo: 1
+activo: 1
+
+usuario: Ru
+contrasena: Ru
+tipo: 1
+activo: 1
